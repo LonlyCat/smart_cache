@@ -8,7 +8,7 @@ environment:
   flutter: '>=3.3.0'
 
 dependencies:
-  crypto: ^3.0.6
+  crypto: 3.0.3
   flutter:
     sdk: flutter
   flutter_cache_manager: ^3.4.1
