@@ -329,10 +329,10 @@
       "name": "smart_cache",
       "rootUri": "../",
       "packageUri": "lib/",
-      "languageVersion": "3.6"
+      "languageVersion": "3.3"
     }
   ],
-  "generated": "2025-03-20T08:28:59.420144Z",
+  "generated": "2025-03-20T09:40:47.111136Z",
   "generator": "pub",
   "generatorVersion": "3.6.2",
   "flutterRoot": "file:///Users/bingsen/fvm/versions/stable",
