@@ -144,7 +144,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
       _traditionalCache[productId] = product;
 
       // 存储到SmartCache
-      _smartCache.putObject<Product>(productId, product, fromJson: Product.fromJson);
+      _smartCache.putObject<Product>(productId, product);
     }
   }
 

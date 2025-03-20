@@ -107,14 +107,10 @@ class SmartCacheManager {
   ///
   /// [key] 缓存键
   /// [data] 要存储的对象
-  /// [fromJson] 从JSON转换为对象的函数
-  void putObject<T>(String key, T data, {required T Function(Map<String, dynamic> json) fromJson}) {
+  void putObject<T>(String key, T data) {
+    assert(_modelRegistry.containsKey(T.toString()),
+        '未注册模型转换器，请通过 `registerModel<T>` 注册: ${T.toString()}');
     final String hashedKey = _generateKey(key);
-
-    // 注册模型转换器(如果尚未注册)
-    if (!_modelRegistry.containsKey(T.toString())) {
-      registerModel<T>(fromJson);
-    }
 
     // 存储对象及其类型信息
     _activeCache[hashedKey] = {
