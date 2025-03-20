@@ -314,7 +314,7 @@ class SmartCacheManager {
   /// 获取缓存统计信息
   CacheStats getStats() {
     double compressedCache = _compressedCache.values.fold(0, (size, item) {
-      return 0 + item.lengthInBytes / 1024;
+      return size + item.lengthInBytes / 1024;
     });
     return CacheStats(
       memoryUsage: CacheMemoryUsage(
