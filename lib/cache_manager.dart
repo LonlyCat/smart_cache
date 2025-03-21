@@ -7,6 +7,9 @@ import 'dart:io';
 
 import 'package:smart_cache/model/CacheStats.dart';
 
+/// 日志输出
+void Function(String? message, { int? wrapWidth }) cacheLogger = debugPrint;
+
 /// 可序列化接口，用于不能直接JSON序列化的对象
 abstract class Serializable {
   Map<String, dynamic> serialize();
@@ -75,7 +78,7 @@ class SmartCacheManager {
     });
 
     _isInitialized = true;
-    debugPrint('SmartCacheManager 初始化完成');
+    cacheLogger('SmartCacheManager 初始化完成');
   }
 
   /// 注册模型转换器
@@ -84,7 +87,7 @@ class SmartCacheManager {
   /// [fromJson] 是将JSON Map转换为T类型对象的函数
   void registerModel<T>(T Function(Map<String, dynamic> json) fromJson) {
     _modelRegistry[T.toString()] = fromJson;
-    debugPrint('已注册模型转换器: ${T.toString()}');
+    cacheLogger('已注册模型转换器: ${T.toString()}');
   }
 
   /// 存储基本数据
@@ -123,7 +126,11 @@ class SmartCacheManager {
     final String hashedKey = _generateKey(key);
 
     // 序列化对象并存储
-    _activeCache[hashedKey] = {'isSerializable': true, 'data': object.serialize(), 'type': T.toString()};
+    _activeCache[hashedKey] = {
+      'isSerializable': true,
+      'data': object.serialize(),
+      'type': T.toString(),
+    };
 
     _updateAccessRecord(hashedKey);
   }
@@ -137,9 +144,12 @@ class SmartCacheManager {
     try {
       // 尝试JSON序列化
       final String jsonString = jsonEncode(data);
-      put(key, {'isDynamicObject': true, 'data': jsonString});
+      put(key, {
+        'isDynamicObject': true,
+        'data': jsonString,
+      });
     } catch (e) {
-      debugPrint('无法序列化对象: $e');
+      cacheLogger('无法序列化对象: $e');
       // 如果无法序列化，直接存储
       put(key, data);
     }
@@ -200,7 +210,7 @@ class SmartCacheManager {
         }
       }
     } catch (e) {
-      debugPrint('获取对象时出错: $e');
+      cacheLogger('获取对象时出错: $e');
     }
 
     return null;
@@ -223,7 +233,7 @@ class SmartCacheManager {
         }
       }
     } catch (e) {
-      debugPrint('获取可序列化对象时出错: $e');
+      cacheLogger('获取可序列化对象时出错: $e');
     }
 
     return null;
@@ -245,7 +255,7 @@ class SmartCacheManager {
         }
       }
     } catch (e) {
-      debugPrint('获取动态对象时出错: $e');
+      cacheLogger('获取动态对象时出错: $e');
     }
 
     return cachedData;
@@ -327,8 +337,8 @@ class SmartCacheManager {
       }
     }
 
-    debugPrint('SmartCacheManager 压缩了 ${keysToCompress.length} 项数据');
-    debugPrint('SmartCacheManager 当前还有 ${_activeCache.length} 项活跃数据');
+    cacheLogger('SmartCacheManager 压缩了 ${keysToCompress.length} 项数据');
+    cacheLogger('SmartCacheManager 当前还有 ${_activeCache.length} 项活跃数据');
   }
 
   /// 压缩数据并存储
@@ -383,7 +393,7 @@ class SmartCacheManager {
         _saveToDiskCache(key, compressedData);
       }
     } catch (e) {
-      debugPrint('压缩缓存时出错: $e');
+      cacheLogger('压缩缓存时出错: $e');
       // 压缩失败时保留在活跃缓存中
     }
   }
@@ -412,7 +422,7 @@ class SmartCacheManager {
               final restoredObject = modelFactory(data);
               return {'isModel': true, 'type': type, 'data': restoredObject};
             } catch (e) {
-              debugPrint('恢复模型对象时出错: $e');
+              cacheLogger('恢复模型对象时出错: $e');
               // 如果恢复失败，返回原始数据
               return decodedData;
             }
@@ -431,7 +441,7 @@ class SmartCacheManager {
         return decodedData;
       }
     } catch (e) {
-      debugPrint('解压缩数据时出错: $e');
+      cacheLogger('解压缩数据时出错: $e');
     }
     return null;
   }
@@ -446,7 +456,7 @@ class SmartCacheManager {
         maxAge: _diskCacheMaxAge,
       );
     } catch (e) {
-      debugPrint('保存到磁盘缓存时出错: $e');
+      cacheLogger('保存到磁盘缓存时出错: $e');
     }
   }
 
@@ -460,7 +470,7 @@ class SmartCacheManager {
         _compressedCache[key] = bytes;
       }
     } catch (e) {
-      debugPrint('从磁盘缓存加载时出错: $e');
+      cacheLogger('从磁盘缓存加载时出错: $e');
     }
   }
 
@@ -514,7 +524,7 @@ class SmartCacheManager {
         }
       }
     } catch (e) {
-      debugPrint('预加载缓存时出错: $e');
+      cacheLogger('预加载缓存时出错: $e');
     }
   }
 
