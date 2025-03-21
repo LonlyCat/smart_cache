@@ -1,5 +1,4 @@
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
-import 'package:smart_cache/lru/lru.dart';
 import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
@@ -11,8 +10,8 @@ import 'package:smart_cache/model/CacheStats.dart';
 /// 可序列化接口，用于不能直接JSON序列化的对象
 abstract class Serializable {
   Map<String, dynamic> serialize();
-  static T? deserialize<T extends Serializable>(
-      Map<String, dynamic> data, T Function(Map<String, dynamic>) factory) {
+
+  static T? deserialize<T extends Serializable>(Map<String, dynamic> data, T Function(Map<String, dynamic>) factory) {
     return factory(data);
   }
 }
@@ -23,18 +22,19 @@ abstract class Serializable {
 class SmartCacheManager {
   // 单例模式
   static final SmartCacheManager _instance = SmartCacheManager();
+
   static SmartCacheManager get standard => _instance;
 
   // 配置参数
-  final int _maxActiveItems;            // 活跃缓存最大项数
-  final Duration _inactiveTimeout;      // 不活跃判定时间
-  final Duration _cleanupInterval;      // 清理间隔
-  final Duration _diskCacheMaxAge;      // 磁盘缓存最大保存时间
+  final int _maxActiveItems; // 活跃缓存最大项数
+  final Duration _inactiveTimeout; // 不活跃判定时间
+  final Duration _cleanupInterval; // 清理间隔
+  final Duration _diskCacheMaxAge; // 磁盘缓存最大保存时间
 
   SmartCacheManager({
-    int maxActiveItems = 50,
-    Duration inactiveTimeout = const Duration(seconds: 30),
-    Duration cleanupInterval = const Duration(seconds: 10),
+    int maxActiveItems = 100,
+    Duration inactiveTimeout = const Duration(seconds: 15),
+    Duration cleanupInterval = const Duration(seconds: 30),
     Duration diskCacheMaxAge = const Duration(days: 3),
   })  : _maxActiveItems = maxActiveItems,
         _inactiveTimeout = inactiveTimeout,
@@ -42,7 +42,7 @@ class SmartCacheManager {
         _diskCacheMaxAge = diskCacheMaxAge;
 
   // 活跃缓存 - 保持在内存中的数据
-  late final LruCache<String, dynamic> _activeCache = LruCache(_maxActiveItems);
+  final Map<String, dynamic> _activeCache = {};
 
   // 访问频率记录
   final Map<String, int> _accessCount = {};
@@ -73,8 +73,6 @@ class SmartCacheManager {
     _cleanupTimer = Timer.periodic(_cleanupInterval, (_) {
       _compressInactiveData();
     });
-
-    _activeCache.willEvictEntry = _willEvictActiveEntry;
 
     _isInitialized = true;
     debugPrint('SmartCacheManager 初始化完成');
@@ -108,16 +106,11 @@ class SmartCacheManager {
   /// [key] 缓存键
   /// [data] 要存储的对象
   void putObject<T>(String key, T data) {
-    assert(_modelRegistry.containsKey(T.toString()),
-        '未注册模型转换器，请通过 `registerModel<T>` 注册: ${T.toString()}');
+    assert(_modelRegistry.containsKey(T.toString()), '未注册模型转换器，请通过 `registerModel<T>` 注册: ${T.toString()}');
     final String hashedKey = _generateKey(key);
 
     // 存储对象及其类型信息
-    _activeCache[hashedKey] = {
-      'isModel': true,
-      'data': data,
-      'type': T.toString()
-    };
+    _activeCache[hashedKey] = {'isModel': true, 'data': data, 'type': T.toString()};
 
     _updateAccessRecord(hashedKey);
   }
@@ -130,11 +123,7 @@ class SmartCacheManager {
     final String hashedKey = _generateKey(key);
 
     // 序列化对象并存储
-    _activeCache[hashedKey] = {
-      'isSerializable': true,
-      'data': object.serialize(),
-      'type': T.toString()
-    };
+    _activeCache[hashedKey] = {'isSerializable': true, 'data': object.serialize(), 'type': T.toString()};
 
     _updateAccessRecord(hashedKey);
   }
@@ -148,10 +137,7 @@ class SmartCacheManager {
     try {
       // 尝试JSON序列化
       final String jsonString = jsonEncode(data);
-      put(key, {
-        'isDynamicObject': true,
-        'data': jsonString
-      });
+      put(key, {'isDynamicObject': true, 'data': jsonString});
     } catch (e) {
       debugPrint('无法序列化对象: $e');
       // 如果无法序列化，直接存储
@@ -198,18 +184,12 @@ class SmartCacheManager {
 
     try {
       // 检查是否是模型对象
-      if (cachedData is Map &&
-          cachedData['isModel'] == true &&
-          cachedData['type'] == T.toString()) {
+      if (cachedData is Map && cachedData['isModel'] == true && cachedData['type'] == T.toString()) {
         return cachedData['data'] as T;
       }
 
       // 如果是已经从压缩缓存还原的对象
-      if (cachedData is Map &&
-          cachedData.containsKey('data') &&
-          cachedData.containsKey('type') &&
-          cachedData['type'] == T.toString()) {
-
+      if (cachedData is Map && cachedData.containsKey('data') && cachedData.containsKey('type') && cachedData['type'] == T.toString()) {
         final dynamic data = cachedData['data'];
         if (data is T) return data;
 
@@ -236,9 +216,7 @@ class SmartCacheManager {
     if (cachedData == null) return null;
 
     try {
-      if (cachedData is Map &&
-          cachedData['isSerializable'] == true &&
-          cachedData['type'] == T.toString()) {
+      if (cachedData is Map && cachedData['isSerializable'] == true && cachedData['type'] == T.toString()) {
         final data = cachedData['data'];
         if (data is Map<String, dynamic>) {
           return factory(data);
@@ -278,8 +256,7 @@ class SmartCacheManager {
   /// [key] 缓存键
   bool containsKey(String key) {
     final String hashedKey = _generateKey(key);
-    return _activeCache.containsKey(hashedKey) ||
-        _compressedCache.containsKey(hashedKey);
+    return _activeCache.containsKey(hashedKey) || _compressedCache.containsKey(hashedKey);
   }
 
   /// 移除缓存
@@ -321,22 +298,24 @@ class SmartCacheManager {
     );
   }
 
-  void _willEvictActiveEntry(LruCacheEntry<String, dynamic> entry) {
-    final key = entry.key;
-    if (_activeCache.containsKey(key)) {
-      _compressDataToStorage(key);
-    }
-  }
-
   /// 将不活跃数据压缩
   void _compressInactiveData() {
     final now = DateTime.now();
     final List<String> keysToCompress = [];
 
+    // 检查活跃缓存是否超过最大项数
+    if (_activeCache.length > _maxActiveItems) {
+      final sortedKeys = _accessCount.keys.toList()..sort((a, b) => _accessCount[a]!.compareTo(_accessCount[b]!));
+      final keysToRemove = sortedKeys.take(_activeCache.length - _maxActiveItems);
+      for (final key in keysToRemove) {
+        keysToCompress.add(key);
+      }
+    }
+
     // 查找超过指定时间未访问的数据
     for (final key in _lastAccessTime.keys) {
       final lastAccess = _lastAccessTime[key]!;
-      if (now.difference(lastAccess) > _inactiveTimeout && _activeCache.containsKey(key)) {
+      if (now.difference(lastAccess) > _inactiveTimeout && _activeCache.containsKey(key) && !keysToCompress.contains(key)) {
         keysToCompress.add(key);
       }
     }
@@ -349,6 +328,7 @@ class SmartCacheManager {
     }
 
     debugPrint('SmartCacheManager 压缩了 ${keysToCompress.length} 项数据');
+    debugPrint('SmartCacheManager 当前还有 ${_activeCache.length} 项活跃数据');
   }
 
   /// 压缩数据并存储
@@ -380,11 +360,7 @@ class SmartCacheManager {
               jsonObject = modelData.toJson();
             }
 
-            jsonData = jsonEncode({
-              'isModel': true,
-              'type': type,
-              'data': jsonObject
-            });
+            jsonData = jsonEncode({'isModel': true, 'type': type, 'data': jsonObject});
           } else {
             throw Exception('无法序列化模型对象');
           }
@@ -434,11 +410,7 @@ class SmartCacheManager {
           if (modelFactory != null && data is Map<String, dynamic>) {
             try {
               final restoredObject = modelFactory(data);
-              return {
-                'isModel': true,
-                'type': type,
-                'data': restoredObject
-              };
+              return {'isModel': true, 'type': type, 'data': restoredObject};
             } catch (e) {
               debugPrint('恢复模型对象时出错: $e');
               // 如果恢复失败，返回原始数据
