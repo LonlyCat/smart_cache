@@ -192,8 +192,7 @@ class SmartCacheManager {
   /// [key] 缓存键
   /// 返回T类型的对象，或null
   T? getObject<T>(String key) {
-    final String hashedKey = _generateKey(key);
-    final dynamic cachedData = get(hashedKey);
+    final dynamic cachedData = get(key);
 
     if (cachedData == null) return null;
 
@@ -232,8 +231,7 @@ class SmartCacheManager {
   /// [key] 缓存键
   /// [factory] 从序列化数据创建对象的工厂函数
   T? getSerializable<T extends Serializable>(String key, T Function(Map<String, dynamic>) factory) {
-    final String hashedKey = _generateKey(key);
-    final dynamic cachedData = get(hashedKey);
+    final dynamic cachedData = get(key);
 
     if (cachedData == null) return null;
 
@@ -257,8 +255,7 @@ class SmartCacheManager {
   ///
   /// [key] 缓存键
   dynamic getDynamicObject(String key) {
-    final String hashedKey = _generateKey(key);
-    final dynamic cachedData = get(hashedKey);
+    final dynamic cachedData = get(key);
 
     if (cachedData == null) return null;
 
