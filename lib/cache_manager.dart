@@ -11,15 +11,6 @@ import 'package:smart_cache/model/cache_stats.dart';
 /// 日志输出
 void Function(String? message, { int? wrapWidth }) cacheLogger = debugPrint;
 
-/// 可序列化接口，用于不能直接JSON序列化的对象
-abstract class Serializable {
-  Map<String, dynamic> serialize();
-
-  static T? deserialize<T extends Serializable>(Map<String, dynamic> data, T Function(Map<String, dynamic>) factory) {
-    return factory(data);
-  }
-}
-
 /// 智能缓存管理器
 /// 支持内存缓存、压缩缓存和磁盘缓存
 /// 自动管理活跃和非活跃数据
@@ -32,17 +23,20 @@ class SmartCacheManager {
   // 配置参数
   final int _maxActiveItems; // 活跃缓存最大项数
   final Duration _inactiveTimeout; // 不活跃判定时间
-  final Duration _cleanupInterval; // 清理间隔
+  final Duration _shallowCleanInterval; // 浅清理间隔：内存压缩但不存储到磁盘
+  final Duration _deepCleanInterval; // 深清理间隔：压缩后的内存存储到磁盘，并释放内存
   final Duration _diskCacheMaxAge; // 磁盘缓存最大保存时间
 
   SmartCacheManager({
-    int maxActiveItems = 100,
+    int maxActiveItems = 60,
     Duration inactiveTimeout = const Duration(seconds: 15),
-    Duration cleanupInterval = const Duration(seconds: 30),
+    Duration shallowCleanInterval = const Duration(seconds: 30),
+    Duration deepCleanInterval = const Duration(minutes: 1),
     Duration diskCacheMaxAge = const Duration(days: 3),
   })  : _maxActiveItems = maxActiveItems,
         _inactiveTimeout = inactiveTimeout,
-        _cleanupInterval = cleanupInterval,
+        _shallowCleanInterval = shallowCleanInterval,
+        _deepCleanInterval = deepCleanInterval,
         _diskCacheMaxAge = diskCacheMaxAge;
 
   // 活跃缓存 - 保持在内存中的数据
@@ -55,7 +49,8 @@ class SmartCacheManager {
   final Map<String, Uint8List> _compressedCache = {};
 
   // 缓存清理定时器
-  Timer? _cleanupTimer;
+  Timer? _shallowCleanTimer;
+  Timer? _deepCleanTimer;
 
   // 磁盘缓存管理器
   final DefaultCacheManager _diskCacheManager = DefaultCacheManager();
@@ -110,23 +105,6 @@ class SmartCacheManager {
     _updateAccessRecord(hashedKey);
   }
 
-  /// 存储可序列化对象
-  ///
-  /// [key] 缓存键
-  /// [object] 实现了Serializable接口的对象
-  void putSerializable<T extends Serializable>(String key, T object) {
-    final String hashedKey = _generateKey(key);
-
-    // 序列化对象并存储
-    _activeCache[hashedKey] = {
-      'isSerializable': true,
-      'data': object.serialize(),
-      'type': T.toString(),
-    };
-
-    _updateAccessRecord(hashedKey);
-  }
-
   /// 存储动态结构的复杂对象
   ///
   /// 通过JSON序列化后存储
@@ -147,11 +125,11 @@ class SmartCacheManager {
     }
   }
 
-  /// 获取基本数据
+  /// 获取基本数据, 此方法会忽略磁盘缓存
   ///
   /// [key] 缓存键
-  dynamic get(String key) {
-    final String hashedKey = _generateKey(key);
+  dynamic get(String key, { bool isHashedKey = false }) {
+    final String hashedKey = isHashedKey ? key : _generateKey(key);
 
     // 检查活跃缓存
     if (_activeCache.containsKey(hashedKey)) {
@@ -169,18 +147,28 @@ class SmartCacheManager {
       return decompressedData;
     }
 
-    // 尝试从磁盘缓存获取
-    _tryLoadFromDiskCache(hashedKey);
-
     return null;
   }
 
-  /// 获取对象
+  /// 异步获取基本数据，包括磁盘缓存
+  ///
+  /// [key] 缓存键
+  Future<dynamic> getAsync(String key) async {
+    final String hashedKey = _generateKey(key);
+
+    if (!_activeCache.containsKey(hashedKey) && !_compressedCache.containsKey(hashedKey)) {
+      // 尝试从磁盘加载
+      await _tryLoadFromDiskCache(hashedKey);
+    }
+    return get(hashedKey, isHashedKey: true);
+  }
+
+  /// 获取对象, 此方法会忽略磁盘缓存
   ///
   /// [key] 缓存键
   /// 返回T类型的对象，或null
-  T? getObject<T>(String key) {
-    final dynamic cachedData = get(key);
+  T? getObject<T>(String key, { bool isHashedKey = false }) {
+    final dynamic cachedData = get(key, isHashedKey: isHashedKey);
 
     if (cachedData == null) return null;
 
@@ -208,34 +196,25 @@ class SmartCacheManager {
     return null;
   }
 
-  /// 获取可序列化对象
+  /// 异步获取对象，包括磁盘缓存
   ///
   /// [key] 缓存键
-  /// [factory] 从序列化数据创建对象的工厂函数
-  T? getSerializable<T extends Serializable>(String key, T Function(Map<String, dynamic>) factory) {
-    final dynamic cachedData = get(key);
+  /// 返回T类型的对象，或null
+  Future<T?> getObjectAsync<T>(String key) async {
+    final String hashedKey = _generateKey(key);
 
-    if (cachedData == null) return null;
-
-    try {
-      if (cachedData is Map && cachedData['isSerializable'] == true && cachedData['type'] == T.toString()) {
-        final data = cachedData['data'];
-        if (data is Map<String, dynamic>) {
-          return factory(data);
-        }
-      }
-    } catch (e) {
-      cacheLogger('获取可序列化对象时出错: $e');
+    if (!_activeCache.containsKey(hashedKey) && !_compressedCache.containsKey(hashedKey)) {
+      // 尝试从磁盘加载
+      await _tryLoadFromDiskCache(hashedKey);
     }
-
-    return null;
+    return getObject<T>(hashedKey, isHashedKey: true);
   }
 
-  /// 获取动态结构的复杂对象
+  /// 获取动态结构的复杂对象(List, Map等), 此方法会忽略磁盘缓存
   ///
   /// [key] 缓存键
-  dynamic getDynamicObject(String key) {
-    final dynamic cachedData = get(key);
+  dynamic getDynamicObject(String key, { bool isHashedKey = false }) {
+    final dynamic cachedData = get(key, isHashedKey: isHashedKey);
 
     if (cachedData == null) return null;
 
@@ -249,16 +228,40 @@ class SmartCacheManager {
     } catch (e) {
       cacheLogger('获取动态对象时出错: $e');
     }
-
     return cachedData;
   }
 
-  /// 检查键是否存在
+  /// 异步获取动态结构的复杂对象(List, Map等)，包括磁盘缓存
   ///
   /// [key] 缓存键
-  bool containsKey(String key) {
+  Future<dynamic> getDynamicObjectAsync(String key) async {
     final String hashedKey = _generateKey(key);
+
+    if (!_activeCache.containsKey(hashedKey) && !_compressedCache.containsKey(hashedKey)) {
+      // 尝试从磁盘加载
+      await _tryLoadFromDiskCache(hashedKey);
+    }
+    return getDynamicObject(hashedKey, isHashedKey: true);
+  }
+
+  /// 检查键是否存在(不包括磁盘缓存)
+  ///
+  /// [key] 缓存键
+  bool containsKey(String key, { bool isHashedKey = false }) {
+    final String hashedKey = isHashedKey ? key : _generateKey(key);
     return _activeCache.containsKey(hashedKey) || _compressedCache.containsKey(hashedKey);
+  }
+
+  /// 异步检查键是否存在，包括磁盘缓存
+  ///
+  /// [key] 缓存键
+  Future<bool> containsKeyAsync(String key) async {
+    final String hashedKey = _generateKey(key);
+    if (!_activeCache.containsKey(hashedKey) && !_compressedCache.containsKey(hashedKey)) {
+      // 尝试从磁盘加载
+      await _tryLoadFromDiskCache(hashedKey);
+    }
+    return containsKey(key);
   }
 
   /// 移除缓存
@@ -275,6 +278,7 @@ class SmartCacheManager {
 
   /// 清空所有缓存
   void clear() {
+    _stopCleanupTimer();
     _activeCache.clear();
     _compressedCache.clear();
     _accessStats.clear();
@@ -298,19 +302,8 @@ class SmartCacheManager {
     );
   }
 
-  void _startCleanupTimer() {
-    _cleanupTimer ??= Timer.periodic(_cleanupInterval, (timer) {
-      _compressInactiveData();
-    });
-  }
-
-  void _stopCleanupTimer() {
-    _cleanupTimer?.cancel();
-    _cleanupTimer = null;
-  }
-
   /// 将不活跃数据压缩
-  void _compressInactiveData() {
+  void compressInactiveData() {
     final now = DateTime.now();
     final List<String> keysToCompress = [];
 
@@ -341,16 +334,48 @@ class SmartCacheManager {
     // 压缩数据
     for (final key in keysToCompress) {
       if (_activeCache.containsKey(key)) {
-        _compressDataToStorage(key);
+        _compressDataByKey(key);
       }
     }
 
-    cacheLogger('SmartCacheManager 压缩了 ${keysToCompress.length} 项数据');
-    cacheLogger('SmartCacheManager 当前还有 ${_activeCache.length} 项活跃数据');
+    cacheLogger('SmartCacheManage'
+        '\n压缩了 ${keysToCompress.length} 项数据'
+        '\n当前还有 ${_activeCache.length} 项活跃数据'
+        '\n当前还有 ${_compressedCache.length} 项压缩数据');
+  }
+
+  /// 将所有压缩数据存储到磁盘
+  void storedAllCompressedData() {
+    final keys = _compressedCache.keys.toList();
+    for (final key in keys) {
+      _saveToDiskCache(key, _compressedCache[key]!);
+      _compressedCache.remove(key);
+    }
+  }
+
+  void _startCleanupTimer() {
+    _shallowCleanTimer ??= Timer.periodic(_shallowCleanInterval, (timer) {
+      compressInactiveData();
+    });
+
+    _deepCleanTimer ??= Timer.periodic(_deepCleanInterval, (timer) {
+      // 深清理：将压缩数据存储到磁盘
+      storedAllCompressedData();
+    });
+  }
+
+  void _stopCleanupTimer() {
+    _shallowCleanTimer?.cancel();
+    _shallowCleanTimer = null;
+
+    storedAllCompressedData();
+
+    _deepCleanTimer?.cancel();
+    _deepCleanTimer = null;
   }
 
   /// 压缩数据并存储
-  void _compressDataToStorage(String key) {
+  void _compressDataByKey(String key) {
     final data = _activeCache.remove(key);
     if (data == null) return;
     try {
@@ -382,9 +407,6 @@ class SmartCacheManager {
         } else {
           throw Exception('无法序列化模型对象');
         }
-      } else if (data is Map && data.containsKey('isSerializable') && data['isSerializable'] == true) {
-        // 处理可序列化对象
-        jsonData = jsonEncode(data);
       } else {
         // 尝试直接序列化
         jsonData = jsonEncode(data);
@@ -396,9 +418,6 @@ class SmartCacheManager {
       _compressedCache[key] = Uint8List.fromList(compressedData);
 
       _accessStats.remove(key);
-
-      // 同时存储到磁盘缓存中以防内存清理
-      _saveToDiskCache(key, compressedData);
 
       // 如果活跃缓存中已经没有数据，停止循环
       if (_activeCache.isEmpty) {
@@ -456,11 +475,6 @@ class SmartCacheManager {
           }
           return decodedData;
         }
-        // 处理可序列化对象
-        else if (decodedData is Map && decodedData.containsKey('isSerializable') && decodedData['isSerializable'] == true) {
-          return decodedData;
-        }
-        // 处理动态对象
         else if (decodedData is Map && decodedData.containsKey('isDynamicObject') && decodedData['isDynamicObject'] == true) {
           return decodedData;
         }
@@ -488,6 +502,8 @@ class SmartCacheManager {
   }
 
   /// 尝试从磁盘缓存加载
+  ///
+  /// [key] 缓存键
   Future<void> _tryLoadFromDiskCache(String key) async {
     try {
       final fileInfo = await _diskCacheManager.getFileFromCache(key);
@@ -516,7 +532,7 @@ class SmartCacheManager {
     _startCleanupTimer();
     // 如果活跃缓存超过最大项数，压缩一部分数据
     if (_activeCache.length > _maxActiveItems) {
-      _compressInactiveData();
+      compressInactiveData();
     }
   }
 
@@ -547,7 +563,7 @@ class SmartCacheManager {
       return;
     }
 
-    // 尝试从磁盘加载
+    // 尝试从磁盘加载至压缩内存
     try {
       final fileInfo = await _diskCacheManager.getFileFromCache(hashedKey);
       if (fileInfo != null) {
@@ -555,13 +571,13 @@ class SmartCacheManager {
         final bytes = await file.readAsBytes();
         _compressedCache[hashedKey] = bytes;
 
-        // 解压到活跃缓存
-        final decompressedData = _decompressData(hashedKey);
-        if (decompressedData != null) {
-          _activeCache[hashedKey] = decompressedData;
-          _compressedCache.remove(hashedKey);
-          _updateAccessRecord(hashedKey);
-        }
+        // // 解压到活跃缓存
+        // final decompressedData = _decompressData(hashedKey);
+        // if (decompressedData != null) {
+        //   _activeCache[hashedKey] = decompressedData;
+        //   _compressedCache.remove(hashedKey);
+        //   _updateAccessRecord(hashedKey);
+        // }
       }
     } catch (e) {
       cacheLogger('预加载缓存时出错: $e');
@@ -570,8 +586,8 @@ class SmartCacheManager {
 
   /// 析构函数
   void dispose() {
-    _cleanupTimer?.cancel();
-    _cleanupTimer = null;
+    _shallowCleanTimer?.cancel();
+    _shallowCleanTimer = null;
     _activeCache.clear();
     _compressedCache.clear();
   }
