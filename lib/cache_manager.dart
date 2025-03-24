@@ -1,11 +1,12 @@
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:smart_cache/model/access_stats.dart';
 import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 
-import 'package:smart_cache/model/CacheStats.dart';
+import 'package:smart_cache/model/cache_stats.dart';
 
 /// 日志输出
 void Function(String? message, { int? wrapWidth }) cacheLogger = debugPrint;
@@ -47,11 +48,8 @@ class SmartCacheManager {
   // 活跃缓存 - 保持在内存中的数据
   final Map<String, dynamic> _activeCache = {};
 
-  // 访问频率记录
-  final Map<String, int> _accessCount = {};
-
-  // 最后访问时间记录
-  final Map<String, DateTime> _lastAccessTime = {};
+  // 访问记录
+  final Map<String, AccessStats> _accessStats = {};
 
   // 压缩数据的临时存储
   final Map<String, Uint8List> _compressedCache = {};
@@ -270,8 +268,7 @@ class SmartCacheManager {
     final String hashedKey = _generateKey(key);
     _activeCache.remove(hashedKey);
     _compressedCache.remove(hashedKey);
-    _accessCount.remove(hashedKey);
-    _lastAccessTime.remove(hashedKey);
+    _accessStats.remove(hashedKey);
     // 从磁盘缓存中移除
     _diskCacheManager.removeFile(hashedKey);
   }
@@ -280,8 +277,7 @@ class SmartCacheManager {
   void clear() {
     _activeCache.clear();
     _compressedCache.clear();
-    _accessCount.clear();
-    _lastAccessTime.clear();
+    _accessStats.clear();
     _diskCacheManager.emptyCache();
   }
 
@@ -319,18 +315,24 @@ class SmartCacheManager {
     final List<String> keysToCompress = [];
 
     // 检查活跃缓存是否超过最大项数
+    List<String> accessKeys = _accessStats.keys.toList();
     if (_activeCache.length > _maxActiveItems) {
-      final sortedKeys = _accessCount.keys.toList()..sort((a, b) => _accessCount[a]!.compareTo(_accessCount[b]!));
-      // 每次压缩多10项
-      final keysToRemove = sortedKeys.take(_activeCache.length - _maxActiveItems + 10);
+      // 按访问时间升序排序
+      final sortedKeys = accessKeys..sort((a, b) {
+        return _accessStats[a]!.lastAccessTime.compareTo(_accessStats[b]!.lastAccessTime);
+      });
+      // 每次压缩多20项
+      final keysToRemove = sortedKeys.take(_activeCache.length - _maxActiveItems + 20);
       for (final key in keysToRemove) {
         keysToCompress.add(key);
       }
+      sortedKeys.clear();
     }
 
     // 查找超过指定时间未访问的数据
-    for (final key in _lastAccessTime.keys) {
-      final lastAccess = _lastAccessTime[key]!;
+    for (final key in accessKeys) {
+      final lastAccess = _accessStats[key]?.lastAccessTime;
+      if (lastAccess == null) continue;
       if (now.difference(lastAccess) > _inactiveTimeout && _activeCache.containsKey(key) && !keysToCompress.contains(key)) {
         keysToCompress.add(key);
       }
@@ -349,65 +351,63 @@ class SmartCacheManager {
 
   /// 压缩数据并存储
   void _compressDataToStorage(String key) {
+    final data = _activeCache.remove(key);
+    if (data == null) return;
     try {
-      final data = _activeCache[key];
-      if (data != null) {
-        String jsonData;
+      String jsonData;
 
-        if (data is String) {
-          // 如果已经是字符串，直接使用
-          jsonData = data;
-        } else if (data is Map && data.containsKey('isDynamicObject') && data['isDynamicObject'] == true) {
-          // 如果是动态对象，已经JSON序列化
-          jsonData = jsonEncode(data);
-        } else if (data is Map && data.containsKey('isModel') && data['isModel'] == true) {
-          // 处理模型对象
-          final type = data['type'];
-          final modelData = data['data'];
+      if (data is String) {
+        // 如果已经是字符串，直接使用
+        jsonData = data;
+      } else if (data is Map && data.containsKey('isDynamicObject') && data['isDynamicObject'] == true) {
+        // 如果是动态对象，已经JSON序列化
+        jsonData = jsonEncode(data);
+      } else if (data is Map && data.containsKey('isModel') && data['isModel'] == true) {
+        // 处理模型对象
+        final type = data['type'];
+        final modelData = data['data'];
 
-          // 检查对象是否可以序列化为JSON
-          if (modelData != null) {
-            dynamic jsonObject;
+        // 检查对象是否可以序列化为JSON
+        if (modelData != null) {
+          dynamic jsonObject;
 
-            if (modelData is Map<String, dynamic>) {
-              jsonObject = modelData;
-            } else if (modelData.toJson is Function) {
-              // 调用对象的toJson方法
-              jsonObject = modelData.toJson();
-            }
-
-            jsonData = jsonEncode({'isModel': true, 'type': type, 'data': jsonObject});
-          } else {
-            throw Exception('无法序列化模型对象');
+          if (modelData is Map<String, dynamic>) {
+            jsonObject = modelData;
+          } else if (modelData.toJson is Function) {
+            // 调用对象的toJson方法
+            jsonObject = modelData.toJson();
           }
-        } else if (data is Map && data.containsKey('isSerializable') && data['isSerializable'] == true) {
-          // 处理可序列化对象
-          jsonData = jsonEncode(data);
+
+          jsonData = jsonEncode({'isModel': true, 'type': type, 'data': jsonObject});
         } else {
-          // 尝试直接序列化
-          jsonData = jsonEncode(data);
+          throw Exception('无法序列化模型对象');
         }
+      } else if (data is Map && data.containsKey('isSerializable') && data['isSerializable'] == true) {
+        // 处理可序列化对象
+        jsonData = jsonEncode(data);
+      } else {
+        // 尝试直接序列化
+        jsonData = jsonEncode(data);
+      }
 
-        // 压缩数据
-        final compressedData = gzip.encode(utf8.encode(jsonData));
-        // 存储压缩数据
-        _compressedCache[key] = Uint8List.fromList(compressedData);
-        // 从活跃缓存中移除
-        _activeCache.remove(key);
-        _accessCount.remove(key);
-        _lastAccessTime.remove(key);
+      // 压缩数据
+      final compressedData = gzip.encode(utf8.encode(jsonData));
+      // 存储压缩数据
+      _compressedCache[key] = Uint8List.fromList(compressedData);
 
-        // 同时存储到磁盘缓存中以防内存清理
-        _saveToDiskCache(key, compressedData);
+      _accessStats.remove(key);
 
-        // 如果活跃缓存中已经没有数据，停止循环
-        if (_activeCache.isEmpty) {
-          _stopCleanupTimer();
-        }
+      // 同时存储到磁盘缓存中以防内存清理
+      _saveToDiskCache(key, compressedData);
+
+      // 如果活跃缓存中已经没有数据，停止循环
+      if (_activeCache.isEmpty) {
+        _stopCleanupTimer();
       }
     } catch (e) {
       cacheLogger('压缩缓存时出错: $e');
       // 压缩失败时保留在活跃缓存中
+      _activeCache[key] = data;
     }
   }
 
@@ -503,8 +503,14 @@ class SmartCacheManager {
 
   /// 更新访问记录
   void _updateAccessRecord(String key) {
-    _accessCount[key] = (_accessCount[key] ?? 0) + 1;
-    _lastAccessTime[key] = DateTime.now();
+    AccessStats? oldStats = _accessStats[key];
+    if (oldStats == null) {
+      _accessStats[key] = AccessStats(count: 0, lastAccessTime: DateTime.now());
+    }
+    else {
+      oldStats.lastAccessTime = DateTime.now();
+      oldStats.count++;
+    }
 
     // 有更新时启动清理定时器
     _startCleanupTimer();
