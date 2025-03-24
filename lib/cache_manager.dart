@@ -64,22 +64,7 @@ class SmartCacheManager {
 
   // 模型注册表 - 用于反序列化
   final Map<String, Function(Map<String, dynamic>)> _modelRegistry = {};
-
-  // 初始化标志
-  bool _isInitialized = false;
-
-  /// 初始化缓存管理器
-  void init() {
-    if (_isInitialized) return;
-
-    _cleanupTimer?.cancel();
-    _cleanupTimer = Timer.periodic(_cleanupInterval, (_) {
-      _compressInactiveData();
-    });
-
-    _isInitialized = true;
-    cacheLogger('SmartCacheManager 初始化完成');
-  }
+  dynamic Function(String type, Map<String, dynamic>)? _modelGenerator;
 
   /// 注册模型转换器
   ///
@@ -88,6 +73,14 @@ class SmartCacheManager {
   void registerModel<T>(T Function(Map<String, dynamic> json) fromJson) {
     _modelRegistry[T.toString()] = fromJson;
     cacheLogger('已注册模型转换器: ${T.toString()}');
+  }
+
+  /// 注册模型生成器
+  ///
+  /// 用于生成特定类型的对象
+  /// [generator] 是生成T类型对象的函数
+  void registerModelGenerator(dynamic Function(String type, Map<String, dynamic> json) generator) {
+    _modelGenerator = generator;
   }
 
   /// 存储基本数据
@@ -109,7 +102,8 @@ class SmartCacheManager {
   /// [key] 缓存键
   /// [data] 要存储的对象
   void putObject<T>(String key, T data) {
-    assert(_modelRegistry.containsKey(T.toString()), '未注册模型转换器，请通过 `registerModel<T>` 注册: ${T.toString()}');
+    assert((_modelRegistry.containsKey(T.toString()) || _modelGenerator != null),
+    '未注册模型转换器，请通过 `registerModel<T>` 注册: ${T.toString()}');
     final String hashedKey = _generateKey(key);
 
     // 存储对象及其类型信息
@@ -308,6 +302,17 @@ class SmartCacheManager {
     );
   }
 
+  void _startCleanupTimer() {
+    _cleanupTimer ??= Timer.periodic(_cleanupInterval, (timer) {
+      _compressInactiveData();
+    });
+  }
+
+  void _stopCleanupTimer() {
+    _cleanupTimer?.cancel();
+    _cleanupTimer = null;
+  }
+
   /// 将不活跃数据压缩
   void _compressInactiveData() {
     final now = DateTime.now();
@@ -316,7 +321,8 @@ class SmartCacheManager {
     // 检查活跃缓存是否超过最大项数
     if (_activeCache.length > _maxActiveItems) {
       final sortedKeys = _accessCount.keys.toList()..sort((a, b) => _accessCount[a]!.compareTo(_accessCount[b]!));
-      final keysToRemove = sortedKeys.take(_activeCache.length - _maxActiveItems);
+      // 每次压缩多10项
+      final keysToRemove = sortedKeys.take(_activeCache.length - _maxActiveItems + 10);
       for (final key in keysToRemove) {
         keysToCompress.add(key);
       }
@@ -388,9 +394,16 @@ class SmartCacheManager {
         _compressedCache[key] = Uint8List.fromList(compressedData);
         // 从活跃缓存中移除
         _activeCache.remove(key);
+        _accessCount.remove(key);
+        _lastAccessTime.remove(key);
 
         // 同时存储到磁盘缓存中以防内存清理
         _saveToDiskCache(key, compressedData);
+
+        // 如果活跃缓存中已经没有数据，停止循环
+        if (_activeCache.isEmpty) {
+          _stopCleanupTimer();
+        }
       }
     } catch (e) {
       cacheLogger('压缩缓存时出错: $e');
@@ -421,6 +434,20 @@ class SmartCacheManager {
             try {
               final restoredObject = modelFactory(data);
               return {'isModel': true, 'type': type, 'data': restoredObject};
+            } catch (e) {
+              cacheLogger('恢复模型对象时出错: $e');
+              // 如果恢复失败，返回原始数据
+              return decodedData;
+            }
+          }
+
+          // 如果没有注册的工厂函数，尝试使用注册的生成器
+          if (_modelGenerator != null && data is Map<String, dynamic>) {
+            try {
+              final restoredObject = _modelGenerator!(type, data);
+              if (restoredObject != null) {
+                return {'isModel': true, 'type': type, 'data': restoredObject};
+              }
             } catch (e) {
               cacheLogger('恢复模型对象时出错: $e');
               // 如果恢复失败，返回原始数据
@@ -478,6 +505,13 @@ class SmartCacheManager {
   void _updateAccessRecord(String key) {
     _accessCount[key] = (_accessCount[key] ?? 0) + 1;
     _lastAccessTime[key] = DateTime.now();
+
+    // 有更新时启动清理定时器
+    _startCleanupTimer();
+    // 如果活跃缓存超过最大项数，压缩一部分数据
+    if (_activeCache.length > _maxActiveItems) {
+      _compressInactiveData();
+    }
   }
 
   /// 生成键的哈希值
@@ -534,6 +568,5 @@ class SmartCacheManager {
     _cleanupTimer = null;
     _activeCache.clear();
     _compressedCache.clear();
-    _isInitialized = false;
   }
 }

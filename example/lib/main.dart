@@ -64,15 +64,22 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
     WidgetsBinding.instance.addObserver(this);
 
     // 初始化SmartCache
-    _smartCache.init();
-    _smartCache.registerModel<Product>(Product.fromJson);
-    _smartCache.registerModel<Variant>(Variant.fromJson);
+    // _smartCache.registerModel<Product>(Product.fromJson);
+    // _smartCache.registerModel<Variant>(Variant.fromJson);
+    _smartCache.registerModelGenerator((type, json) {
+      if (type == 'Product') {
+        return Product.fromJson(json);
+      } else if (type == 'Variant') {
+        return Variant.fromJson(json);
+      }
+      return null;
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _stopMemoryMonitoring(clearCache: true);
+    _stopMemoryMonitoring();
     _smartCache.dispose();
     super.dispose();
   }
@@ -93,9 +100,9 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
       if (_currentBatch < _totalBatches) {
         _loadNextBatch();
       } else if (_currentBatch >= _totalBatches && _currentBatch < _totalBatches + 10) {
-        // 最后一批加载完毕后，模拟随机访问
+        // 最后一批加载完毕后，模拟 10 批随机访问
         _simulateRandomAccess();
-      } else if (_currentBatch == _totalBatches + 10) {
+      } else if (_currentBatch == _totalBatches + 40) {
         // 模拟访问一段时间后停止测试
         _stopMemoryMonitoring();
       }
@@ -104,7 +111,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
   }
 
   // 停止内存监控
-  void _stopMemoryMonitoring({ bool clearCache = false }) {
+  void _stopMemoryMonitoring({ bool clearCache = true }) {
     _memoryMonitorTimer?.cancel();
     _memoryMonitorTimer = null;
 
@@ -121,8 +128,8 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
   // 模拟随机访问数据
   void _simulateRandomAccess() {
     final random = Random();
-    // 随机访问50个产品
-    for (int i = 0; i < 50; i++) {
+    // 随机访问10个产品
+    for (int i = 0; i < 10; i++) {
       final productId = 'product-${random.nextInt(_productsPerBatch * _totalBatches)}';
 
       // 传统方法访问
@@ -313,7 +320,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
 
             ElevatedButton(
               onPressed: _isRunningTest
-                  ? () => _stopMemoryMonitoring(clearCache: true)
+                  ? () => _stopMemoryMonitoring()
                   : null,
               child: Text('停止测试'),
             ),
