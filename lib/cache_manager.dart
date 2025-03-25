@@ -143,7 +143,6 @@ class SmartCacheManager {
       // 解压数据并移回活跃缓存
       final dynamic decompressedData = _decompressData(hashedKey);
       _activeCache[hashedKey] = decompressedData;
-      _compressedCache.remove(hashedKey);
       _updateAccessRecord(hashedKey);
       return decompressedData;
     }
@@ -440,8 +439,8 @@ class SmartCacheManager {
   /// 解压缩数据
   dynamic _decompressData(String key) {
     Stopwatch? stopwatch = Stopwatch()..start();
+    final compressedData = _compressedCache.remove(key);
     try {
-      final compressedData = _compressedCache[key];
       if (compressedData != null) {
         // 解压数据
         final decompressedBytes = gzip.decode(compressedData);
@@ -486,13 +485,15 @@ class SmartCacheManager {
         else if (decodedData is Map && decodedData.containsKey('isDynamicObject') && decodedData['isDynamicObject'] == true) {
           return decodedData;
         }
-        cacheLogger('解压缩数据 ${stopwatch.elapsedMilliseconds} ms');
         return decodedData;
       }
     } catch (e) {
       cacheLogger('解压缩数据时出错: $e');
     } finally {
-      stopwatch?.stop();
+      if (compressedData != null) {
+        cacheLogger('解压缩数据 ${stopwatch.elapsedMilliseconds} ms');
+      }
+      stopwatch.stop();
       stopwatch = null;
     }
     return null;
@@ -574,7 +575,6 @@ class SmartCacheManager {
       final decompressedData = _decompressData(hashedKey);
       if (decompressedData != null) {
         _activeCache[hashedKey] = decompressedData;
-        _compressedCache.remove(hashedKey);
         _updateAccessRecord(hashedKey);
       }
       return;
