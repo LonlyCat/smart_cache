@@ -1,4 +1,3 @@
-
 import 'package:smart_cache/cache_manager.dart';
 import 'package:flutter/foundation.dart';
 
@@ -6,10 +5,12 @@ import 'package:flutter/foundation.dart';
 ///
 /// [fromCache] 数据从缓存加载
 /// [fromLoader] 数据从加载器加载
+/// [noneCache] 仅当 cacheOnly 为 true 且缓存为空时返回
 /// [failed] 加载失败
 enum CacheableLoadStatus {
   fromCache,
   fromLoader,
+  noneCache,
   failed,
 }
 
@@ -18,7 +19,9 @@ enum CacheableLoadStatus {
 class CacheableLoadResult<T> {
   /// 从缓存加载成功的构造函数
   CacheableLoadResult.fromCache(this.data)
-      : status = CacheableLoadStatus.fromCache,
+      : status = data != null
+          ? CacheableLoadStatus.fromCache
+          : CacheableLoadStatus.noneCache,
         error = null;
 
   /// 从加载器加载成功的构造函数
@@ -33,8 +36,10 @@ class CacheableLoadResult<T> {
 
   /// 加载状态
   final CacheableLoadStatus status;
+
   /// 加载的数据，加载失败时为null
   final T? data;
+
   /// 错误信息，加载成功时为null
   final dynamic error;
 }
@@ -42,9 +47,8 @@ class CacheableLoadResult<T> {
 /// 可缓存加载器类
 /// 提供从缓存或加载器获取数据的功能
 class CacheableLoader {
-
-  /// 加载数据的静态方法
-  /// 
+  /// 以 Stream 形式加载数据
+  ///
   /// [key] 缓存的键
   /// [loader] 实际加载数据的函数
   /// [cacheOnly] 是否只从缓存加载，默认为false
@@ -52,7 +56,7 @@ class CacheableLoader {
   /// [cacheManager] 缓存管理器，不指定时使用标准缓存管理器
   ///
   /// 返回数据加载过程的流
-  static Stream<CacheableLoadResult<T>> load<T>(
+  static Stream<CacheableLoadResult<T>> loadAsStream<T>(
     String key, {
     bool cacheOnly = false,
     bool loaderOnly = false,
@@ -63,26 +67,21 @@ class CacheableLoader {
     assert(!cacheOnly || !loaderOnly, 'cacheOnly 和 loaderOnly 不能同时为 true');
     // 使用提供的缓存管理器或标准缓存管理器
     cacheManager ??= SmartCacheManager.standard;
-    
+
     // 如果不是只从加载器加载，尝试从缓存获取数据
     if (!loaderOnly) {
       try {
         final cachedData = await cacheManager.getObjectAsync<T>(key);
-        if (cachedData != null) {
+        if (cachedData != null || cacheOnly) {
           // 缓存中有数据，返回缓存数据
           yield CacheableLoadResult.fromCache(cachedData);
-          if (cacheOnly) return; // 如果只从缓存加���，直接返回
-        }
-
-        // 如果只从缓存加载但缓存中没有数据，返回失败结果
-        if (cacheOnly) {
-          yield CacheableLoadResult.failed('没有找到缓存数据');
-          return;
         }
       } catch (e) {
         debugPrint('缓存加载失败: $e');
       }
     }
+    // 如果只从缓存加，直接返回
+    if (cacheOnly) return;
 
     // 尝试从加载器获取数据
     try {
@@ -99,6 +98,58 @@ class CacheableLoader {
     } catch (e) {
       // 加载器加载失败，返回错误信息
       yield CacheableLoadResult.failed(e);
+    }
+  }
+
+  /// 以 Future 的形式加载数据
+  ///
+  /// [key] 缓存的键
+  /// [loader] 实际加载数据的函数
+  /// [cacheOnly] 是否只从缓存加载，默认为false
+  /// [loaderOnly] 是否只从加载器加载，默认为false
+  /// [cacheManager] 缓存管理器，不指定时使用标准缓存管理器
+  ///
+  /// 返回数据加载过程的流
+  static Future<CacheableLoadResult<T>> load<T>(
+    String key, {
+    bool cacheOnly = false,
+    bool loaderOnly = false,
+    SmartCacheManager? cacheManager,
+    required Future<T?> Function() loader,
+  }) async {
+    // 确保 cacheOnly 和 loaderOnly 不同时为 true
+    assert(!cacheOnly || !loaderOnly, 'cacheOnly 和 loaderOnly 不能同时为 true');
+    // 使用提供的缓存管理器或标准缓存管理器
+    cacheManager ??= SmartCacheManager.standard;
+
+    // 如果不是只从加载器加载，尝试从缓存获取数据
+    if (!loaderOnly) {
+      try {
+        final cachedData = await cacheManager.getObjectAsync<T>(key);
+        if (cachedData != null || cacheOnly) {
+          // 缓存中有数据，返回缓存数据
+          return CacheableLoadResult.fromCache(cachedData);
+        }
+      } catch (e) {
+        debugPrint('缓存加载失败: $e');
+      }
+    }
+
+    // 尝试从加载器获取数据
+    try {
+      final loadedData = await loader();
+      // 将数据存入缓存
+      if (loadedData != null) {
+        // 返回加载器数据
+        cacheManager.putObject<T>(key, loadedData);
+        return CacheableLoadResult.fromLoader(loadedData);
+      } else {
+        // 加载器返回空数据，返回失败结果
+        return CacheableLoadResult.failed('加载器返回空数据');
+      }
+    } catch (e) {
+      // 加载器加载失败，返回错误信息
+      return CacheableLoadResult.failed(e);
     }
   }
 }

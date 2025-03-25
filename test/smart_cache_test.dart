@@ -20,7 +20,7 @@ void main() {
       );
       cacheManager.putObject(key, cachedData);
 
-      final stream = CacheableLoader.load<TestModel>(
+      final stream = CacheableLoader.loadAsStream<TestModel>(
         key,
         cacheManager: cacheManager,
         loader: () async => Future.value(cachedData),
@@ -39,7 +39,7 @@ void main() {
         name: 'loaded_name',
       );
 
-      final stream = CacheableLoader.load<TestModel>(
+      final stream = CacheableLoader.loadAsStream<TestModel>(
         key,
         cacheManager: cacheManager,
         loader: () async => Future.value(loadedData),
@@ -53,7 +53,7 @@ void main() {
     test('returns failed result when loader fails', () async {
       final key = 'test_key_loader';
 
-      final stream = CacheableLoader.load<String>(
+      final stream = CacheableLoader.loadAsStream<String>(
         key,
         cacheManager: cacheManager,
         loader: () async => Future.error('加载失败'),
@@ -72,7 +72,7 @@ void main() {
       );
       cacheManager.putObject(key, cachedData);
 
-      final stream = CacheableLoader.load<TestModel>(
+      final stream = CacheableLoader.loadAsStream<TestModel>(
         key,
         cacheOnly: true,
         cacheManager: cacheManager,
@@ -96,7 +96,7 @@ void main() {
       );
       cacheManager.putObject(key, cachedData);
 
-      final stream = CacheableLoader.load<TestModel>(
+      final stream = CacheableLoader.loadAsStream<TestModel>(
         key,
         loaderOnly: true,
         cacheManager: cacheManager,

@@ -28,8 +28,8 @@ class SmartCacheManager {
 
   SmartCacheManager({
     bool enableDiskCache = true,
-    int maxActiveItems = 60,
-    Duration inactiveTimeout = const Duration(seconds: 15),
+    int maxActiveItems = 100,
+    Duration inactiveTimeout = const Duration(seconds: 20),
     Duration shallowCleanInterval = const Duration(seconds: 30),
     Duration deepCleanInterval = const Duration(minutes: 1),
     Duration diskCacheMaxAge = const Duration(days: 3),
