@@ -15,12 +15,11 @@ void Function(String? message, { int? wrapWidth }) cacheLogger = debugPrint;
 /// 支持内存缓存、压缩缓存和磁盘缓存
 /// 自动管理活跃和非活跃数据
 class SmartCacheManager {
-  // 单例模式
-  static final SmartCacheManager _instance = SmartCacheManager();
 
-  static SmartCacheManager get standard => _instance;
+  static final SmartCacheManager standard = SmartCacheManager();
 
   // 配置参数
+  final bool _enableDiskCache; // 是否启用磁盘缓存
   final int _maxActiveItems; // 活跃缓存最大项数
   final Duration _inactiveTimeout; // 不活跃判定时间
   final Duration _shallowCleanInterval; // 浅清理间隔：内存压缩但不存储到磁盘
@@ -28,12 +27,14 @@ class SmartCacheManager {
   final Duration _diskCacheMaxAge; // 磁盘缓存最大保存时间
 
   SmartCacheManager({
+    bool enableDiskCache = true,
     int maxActiveItems = 60,
     Duration inactiveTimeout = const Duration(seconds: 15),
     Duration shallowCleanInterval = const Duration(seconds: 30),
     Duration deepCleanInterval = const Duration(minutes: 1),
     Duration diskCacheMaxAge = const Duration(days: 3),
-  })  : _maxActiveItems = maxActiveItems,
+  })  : _enableDiskCache = enableDiskCache,
+        _maxActiveItems = maxActiveItems,
         _inactiveTimeout = inactiveTimeout,
         _shallowCleanInterval = shallowCleanInterval,
         _deepCleanInterval = deepCleanInterval,
@@ -53,7 +54,7 @@ class SmartCacheManager {
   Timer? _deepCleanTimer;
 
   // 磁盘缓存管理器
-  final DefaultCacheManager _diskCacheManager = DefaultCacheManager();
+  late DefaultCacheManager _diskCacheManager = DefaultCacheManager();
 
   // 模型注册表 - 用于反序列化
   final Map<String, Function(Map<String, dynamic>)> _modelRegistry = {};
@@ -273,16 +274,16 @@ class SmartCacheManager {
     _compressedCache.remove(hashedKey);
     _accessStats.remove(hashedKey);
     // 从磁盘缓存中移除
-    _diskCacheManager.removeFile(hashedKey);
+    if (_enableDiskCache) _diskCacheManager.removeFile(hashedKey);
   }
 
   /// 清空所有缓存
   void clear() {
     _stopCleanupTimer();
+    _accessStats.clear();
     _activeCache.clear();
     _compressedCache.clear();
-    _accessStats.clear();
-    _diskCacheManager.emptyCache();
+    if (_enableDiskCache) _diskCacheManager.emptyCache();
   }
 
   /// 获取缓存统计信息
@@ -303,31 +304,37 @@ class SmartCacheManager {
   }
 
   /// 将不活跃数据压缩
-  void compressInactiveData() {
+  ///
+  /// [forced] 强制压缩所有数据
+  void compressInactiveData({ bool forced = false }) {
     final now = DateTime.now();
-    final List<String> keysToCompress = [];
+    List<String> keysToCompress = [];
 
     // 检查活跃缓存是否超过最大项数
     List<String> accessKeys = _accessStats.keys.toList();
-    if (_activeCache.length > _maxActiveItems) {
-      // 按访问时间升序排序
-      final sortedKeys = accessKeys..sort((a, b) {
-        return _accessStats[a]!.lastAccessTime.compareTo(_accessStats[b]!.lastAccessTime);
-      });
-      // 每次压缩多20项
-      final keysToRemove = sortedKeys.take(_activeCache.length - _maxActiveItems + 20);
-      for (final key in keysToRemove) {
-        keysToCompress.add(key);
+    if (forced) {
+      keysToCompress = accessKeys;
+    } else {
+      if (_activeCache.length > _maxActiveItems) {
+        // 按访问时间升序排序
+        final sortedKeys = accessKeys..sort((a, b) {
+          return _accessStats[a]!.lastAccessTime.compareTo(_accessStats[b]!.lastAccessTime);
+        });
+        // 每次压缩多20项
+        final keysToRemove = sortedKeys.take(_activeCache.length - _maxActiveItems + 20);
+        for (final key in keysToRemove) {
+          keysToCompress.add(key);
+        }
+        sortedKeys.clear();
       }
-      sortedKeys.clear();
-    }
 
-    // 查找超过指定时间未访问的数据
-    for (final key in accessKeys) {
-      final lastAccess = _accessStats[key]?.lastAccessTime;
-      if (lastAccess == null) continue;
-      if (now.difference(lastAccess) > _inactiveTimeout && _activeCache.containsKey(key) && !keysToCompress.contains(key)) {
-        keysToCompress.add(key);
+      // 查找超过指定时间未访问的数据
+      for (final key in accessKeys) {
+        final lastAccess = _accessStats[key]?.lastAccessTime;
+        if (lastAccess == null) continue;
+        if (now.difference(lastAccess) > _inactiveTimeout && _activeCache.containsKey(key) && !keysToCompress.contains(key)) {
+          keysToCompress.add(key);
+        }
       }
     }
 
@@ -432,6 +439,7 @@ class SmartCacheManager {
 
   /// 解压缩数据
   dynamic _decompressData(String key) {
+    Stopwatch? stopwatch = Stopwatch()..start();
     try {
       final compressedData = _compressedCache[key];
       if (compressedData != null) {
@@ -478,17 +486,21 @@ class SmartCacheManager {
         else if (decodedData is Map && decodedData.containsKey('isDynamicObject') && decodedData['isDynamicObject'] == true) {
           return decodedData;
         }
-
+        cacheLogger('解压缩数据 ${stopwatch.elapsedMilliseconds} ms');
         return decodedData;
       }
     } catch (e) {
       cacheLogger('解压缩数据时出错: $e');
+    } finally {
+      stopwatch?.stop();
+      stopwatch = null;
     }
     return null;
   }
 
   /// 保存到磁盘缓存
   Future<void> _saveToDiskCache(String key, List<int> compressedData) async {
+    if (!_enableDiskCache) return;
     try {
       await _diskCacheManager.putFile(
         key,
@@ -505,13 +517,18 @@ class SmartCacheManager {
   ///
   /// [key] 缓存键
   Future<void> _tryLoadFromDiskCache(String key) async {
+    if (!_enableDiskCache) return;
     try {
+      Stopwatch? stopwatch = Stopwatch()..start();
       final fileInfo = await _diskCacheManager.getFileFromCache(key);
       if (fileInfo != null) {
         final file = fileInfo.file;
         final bytes = await file.readAsBytes();
         _compressedCache[key] = bytes;
+        cacheLogger('从磁盘缓存加载 ${stopwatch.elapsedMilliseconds} ms');
       }
+      stopwatch.stop();
+      stopwatch = null;
     } catch (e) {
       cacheLogger('从磁盘缓存加载时出错: $e');
     }
@@ -563,6 +580,7 @@ class SmartCacheManager {
       return;
     }
 
+    if (!_enableDiskCache) return;
     // 尝试从磁盘加载至压缩内存
     try {
       final fileInfo = await _diskCacheManager.getFileFromCache(hashedKey);

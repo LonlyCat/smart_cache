@@ -64,8 +64,11 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
     WidgetsBinding.instance.addObserver(this);
 
     // 初始化SmartCache
+    //
+    // 可以使用模型表
     // _smartCache.registerModel<Product>(Product.fromJson);
     // _smartCache.registerModel<Variant>(Variant.fromJson);
+    // 也可以使用模型生成器
     _smartCache.registerModelGenerator((type, json) {
       if (type == 'Product') {
         return Product.fromJson(json);
