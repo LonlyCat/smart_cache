@@ -50,10 +50,11 @@ class CacheableLoader {
   /// 以 Stream 形式加载数据
   ///
   /// [key] 缓存的键
-  /// [loader] 实际加载数据的函数
   /// [cacheOnly] 是否只从缓存加载，默认为false
   /// [loaderOnly] 是否只从加载器加载，默认为false
   /// [cacheManager] 缓存管理器，不指定时使用标准缓存管理器
+  /// [loader] 实际加载数据的函数
+  /// [loaderValidator] 加载数据验证器，用于处理是否应该缓存加载器返回的数据
   ///
   /// 返回数据加载过程的流
   static Stream<CacheableLoadResult<T>> loadAsStream<T>(
@@ -62,6 +63,7 @@ class CacheableLoader {
     bool loaderOnly = false,
     SmartCacheManager? cacheManager,
     required Future<T?> Function() loader,
+    bool Function(T? data)? loaderValidator,
   }) async* {
     // 确保 cacheOnly 和 loaderOnly 不同时为 true
     assert(!cacheOnly || !loaderOnly, 'cacheOnly 和 loaderOnly 不能同时为 true');
@@ -86,15 +88,16 @@ class CacheableLoader {
     // 尝试从加载器获取数据
     try {
       final loadedData = await loader();
-      // 将数据存入缓存
-      if (loadedData != null) {
-        // 返回加载器数据
-        yield CacheableLoadResult.fromLoader(loadedData);
-        cacheManager.putObject<T>(key, loadedData);
-      } else {
-        // 加载器返回空数据，返回失败结果
-        yield CacheableLoadResult.failed('加载器返回空数据');
+      bool willCache = loadedData != null;
+      if (loaderValidator != null) {
+        willCache = loaderValidator(loadedData);
       }
+      // 将数据存入缓存
+      if (willCache && loadedData != null) {
+        cacheManager.putObject<T>(key, loadedData);
+      }
+      // 返回加载器数据
+      yield CacheableLoadResult.fromLoader(loadedData);
     } catch (e) {
       // 加载器加载失败，返回错误信息
       yield CacheableLoadResult.failed(e);
@@ -108,6 +111,7 @@ class CacheableLoader {
   /// [cacheOnly] 是否只从缓存加载，默认为false
   /// [loaderOnly] 是否只从加载器加载，默认为false
   /// [cacheManager] 缓存管理器，不指定时使用标准缓存管理器
+  /// [loaderValidator] 加载数据验证器，用于处理是否应该缓存加载器返回的数据
   ///
   /// 返回数据加载过程的流
   static Future<CacheableLoadResult<T>> load<T>(
@@ -116,6 +120,7 @@ class CacheableLoader {
     bool loaderOnly = false,
     SmartCacheManager? cacheManager,
     required Future<T?> Function() loader,
+    bool Function(T? data)? loaderValidator,
   }) async {
     // 确保 cacheOnly 和 loaderOnly 不同时为 true
     assert(!cacheOnly || !loaderOnly, 'cacheOnly 和 loaderOnly 不能同时为 true');
@@ -138,15 +143,16 @@ class CacheableLoader {
     // 尝试从加载器获取数据
     try {
       final loadedData = await loader();
+      bool willCache = loadedData != null;
+      if (loaderValidator != null) {
+        willCache = loaderValidator(loadedData);
+      }
       // 将数据存入缓存
-      if (loadedData != null) {
+      if (willCache && loadedData != null) {
         // 返回加载器数据
         cacheManager.putObject<T>(key, loadedData);
-        return CacheableLoadResult.fromLoader(loadedData);
-      } else {
-        // 加载器返回空数据，返回失败结果
-        return CacheableLoadResult.failed('加载器返回空数据');
       }
+      return CacheableLoadResult.fromLoader(loadedData);
     } catch (e) {
       // 加载器加载失败，返回错误信息
       return CacheableLoadResult.failed(e);
