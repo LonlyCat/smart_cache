@@ -9,13 +9,12 @@ import 'dart:io';
 import 'package:smart_cache/model/cache_stats.dart';
 
 /// 日志输出
-void Function(String? message, { int? wrapWidth }) cacheLogger = debugPrint;
+void Function(String? message, {int? wrapWidth}) cacheLogger = debugPrint;
 
 /// 智能缓存管理器
 /// 支持内存缓存、压缩缓存和磁盘缓存
 /// 自动管理活跃和非活跃数据
 class SmartCacheManager {
-
   static SmartCacheManager standard = SmartCacheManager();
 
   // 配置参数
@@ -73,7 +72,8 @@ class SmartCacheManager {
   ///
   /// 用于生成特定类型的对象
   /// [generator] 是生成T类型对象的函数
-  void registerModelGenerator(dynamic Function(String type, Map<String, dynamic> json) generator) {
+  void registerModelGenerator(
+      dynamic Function(String type, Map<String, dynamic> json) generator) {
     _modelGenerator = generator;
   }
 
@@ -96,12 +96,17 @@ class SmartCacheManager {
   /// [key] 缓存键
   /// [data] 要存储的对象
   void putObject<T>(String key, T data) {
-    assert((_modelRegistry.containsKey(T.toString()) || _modelGenerator != null),
-    '未注册模型转换器，请通过 `registerModel<T>` 注册: ${T.toString()}');
+    assert(
+        (_modelRegistry.containsKey(T.toString()) || _modelGenerator != null),
+        '未注册模型转换器，请通过 `registerModel<T>` 注册: ${T.toString()}');
     final String hashedKey = _generateKey(key);
 
     // 存储对象及其类型信息
-    _activeCache[hashedKey] = {'isModel': true, 'data': data, 'type': T.toString()};
+    _activeCache[hashedKey] = {
+      'isModel': true,
+      'data': data,
+      'type': T.toString()
+    };
 
     _updateAccessRecord(hashedKey);
   }
@@ -129,7 +134,7 @@ class SmartCacheManager {
   /// 获取基本数据, 此方法会忽略磁盘缓存
   ///
   /// [key] 缓存键
-  dynamic get(String key, { bool isHashedKey = false }) {
+  dynamic get(String key, {bool isHashedKey = false}) {
     final String hashedKey = isHashedKey ? key : _generateKey(key);
 
     // 检查活跃缓存
@@ -153,33 +158,78 @@ class SmartCacheManager {
   /// 异步获取基本数据，包括磁盘缓存
   ///
   /// [key] 缓存键
-  Future<dynamic> getAsync(String key) async {
-    final String hashedKey = _generateKey(key);
+  Future<dynamic> getAsync(String key, {bool isHashedKey = false}) async {
+    final String hashedKey = isHashedKey ? key : _generateKey(key);
 
-    if (!_activeCache.containsKey(hashedKey) && !_compressedCache.containsKey(hashedKey)) {
+    if (!_activeCache.containsKey(hashedKey) &&
+        !_compressedCache.containsKey(hashedKey)) {
       // 尝试从磁盘加载
       await _tryLoadFromDiskCache(hashedKey);
     }
-    return get(hashedKey, isHashedKey: true);
+
+    // 检查活跃缓存
+    if (_activeCache.containsKey(hashedKey)) {
+      _updateAccessRecord(hashedKey);
+      return _activeCache[hashedKey];
+    }
+
+    // 检查压缩缓存
+    if (_compressedCache.containsKey(hashedKey)) {
+      // 解压数据并移回活跃缓存
+      final dynamic decompressedData = await _decompressDataAsync(hashedKey);
+      _activeCache[hashedKey] = decompressedData;
+      _updateAccessRecord(hashedKey);
+      return decompressedData;
+    }
+
+    return null;
   }
 
   /// 获取对象, 此方法会忽略磁盘缓存
   ///
   /// [key] 缓存键
   /// 返回T类型的对象，或null
-  T? getObject<T>(String key, { bool isHashedKey = false }) {
+  T? getObject<T>(String key, {bool isHashedKey = false}) {
     final dynamic cachedData = get(key, isHashedKey: isHashedKey);
 
     if (cachedData == null) return null;
 
+    return _mapObject<T>(cachedData);
+  }
+
+  /// 异步获取对象，包括磁盘缓存
+  ///
+  /// [key] 缓存键
+  /// 返回T类型的对象，或null
+  Future<T?> getObjectAsync<T>(String key) async {
+    final String hashedKey = _generateKey(key);
+
+    if (!_activeCache.containsKey(hashedKey) &&
+        !_compressedCache.containsKey(hashedKey)) {
+      // 尝试从磁盘加载
+      await _tryLoadFromDiskCache(hashedKey);
+    }
+
+    final dynamic cachedData = await getAsync(hashedKey, isHashedKey: true);
+    if (cachedData == null) return null;
+
+    return _mapObject<T>(cachedData);
+  }
+
+  T? _mapObject<T>(dynamic cachedData) {
     try {
       // 检查是否是模型对象
-      if (cachedData is Map && cachedData['isModel'] == true && cachedData['type'] == T.toString()) {
+      if (cachedData is Map &&
+          cachedData['isModel'] == true &&
+          cachedData['type'] == T.toString()) {
         return cachedData['data'] as T;
       }
 
       // 如果是已经从压缩缓存还原的对象
-      if (cachedData is Map && cachedData.containsKey('data') && cachedData.containsKey('type') && cachedData['type'] == T.toString()) {
+      if (cachedData is Map &&
+          cachedData.containsKey('data') &&
+          cachedData.containsKey('type') &&
+          cachedData['type'] == T.toString()) {
         final dynamic data = cachedData['data'];
         if (data is T) return data;
 
@@ -196,35 +246,16 @@ class SmartCacheManager {
     return null;
   }
 
-  /// 异步获取对象，包括磁盘缓存
-  ///
-  /// [key] 缓存键
-  /// 返回T类型的对象，或null
-  Future<T?> getObjectAsync<T>(String key) async {
-    final String hashedKey = _generateKey(key);
-
-    if (!_activeCache.containsKey(hashedKey) && !_compressedCache.containsKey(hashedKey)) {
-      // 尝试从磁盘加载
-      await _tryLoadFromDiskCache(hashedKey);
-    }
-    return getObject<T>(hashedKey, isHashedKey: true);
-  }
-
   /// 获取动态结构的复杂对象(List, Map等), 此方法会忽略磁盘缓存
   ///
   /// [key] 缓存键
-  dynamic getDynamicObject(String key, { bool isHashedKey = false }) {
+  dynamic getDynamicObject(String key, {bool isHashedKey = false}) {
     final dynamic cachedData = get(key, isHashedKey: isHashedKey);
 
     if (cachedData == null) return null;
 
     try {
-      if (cachedData is Map && cachedData['isDynamicObject'] == true) {
-        final jsonString = cachedData['data'];
-        if (jsonString is String) {
-          return jsonDecode(jsonString);
-        }
-      }
+      return _mapDynamicObject(cachedData);
     } catch (e) {
       cacheLogger('获取动态对象时出错: $e');
     }
@@ -237,19 +268,40 @@ class SmartCacheManager {
   Future<dynamic> getDynamicObjectAsync(String key) async {
     final String hashedKey = _generateKey(key);
 
-    if (!_activeCache.containsKey(hashedKey) && !_compressedCache.containsKey(hashedKey)) {
+    if (!_activeCache.containsKey(hashedKey) &&
+        !_compressedCache.containsKey(hashedKey)) {
       // 尝试从磁盘加载
       await _tryLoadFromDiskCache(hashedKey);
     }
-    return getDynamicObject(hashedKey, isHashedKey: true);
+
+    final dynamic cachedData = await getAsync(hashedKey, isHashedKey: true);
+    if (cachedData == null) return null;
+
+    try {
+      return _mapDynamicObject(cachedData);
+    } catch (e) {
+      cacheLogger('获取动态对象时出错: $e');
+    }
+    return cachedData;
+  }
+
+  dynamic _mapDynamicObject(dynamic cachedData) {
+    if (cachedData is Map && cachedData['isDynamicObject'] == true) {
+      final jsonString = cachedData['data'];
+      if (jsonString is String) {
+        return jsonDecode(jsonString);
+      }
+    }
+    return cachedData;
   }
 
   /// 检查键是否存在(不包括磁盘缓存)
   ///
   /// [key] 缓存键
-  bool containsKey(String key, { bool isHashedKey = false }) {
+  bool containsKey(String key, {bool isHashedKey = false}) {
     final String hashedKey = isHashedKey ? key : _generateKey(key);
-    return _activeCache.containsKey(hashedKey) || _compressedCache.containsKey(hashedKey);
+    return _activeCache.containsKey(hashedKey) ||
+        _compressedCache.containsKey(hashedKey);
   }
 
   /// 异步检查键是否存在，包括磁盘缓存
@@ -257,7 +309,8 @@ class SmartCacheManager {
   /// [key] 缓存键
   Future<bool> containsKeyAsync(String key) async {
     final String hashedKey = _generateKey(key);
-    if (!_activeCache.containsKey(hashedKey) && !_compressedCache.containsKey(hashedKey)) {
+    if (!_activeCache.containsKey(hashedKey) &&
+        !_compressedCache.containsKey(hashedKey)) {
       // 尝试从磁盘加载
       await _tryLoadFromDiskCache(hashedKey);
     }
@@ -305,7 +358,7 @@ class SmartCacheManager {
   /// 将不活跃数据压缩
   ///
   /// [forced] 强制压缩所有数据
-  void compressInactiveData({ bool forced = false }) {
+  void compressInactiveData({bool forced = false}) {
     final now = DateTime.now();
     List<String> keysToCompress = [];
 
@@ -316,11 +369,15 @@ class SmartCacheManager {
     } else {
       if (_activeCache.length > _maxActiveItems) {
         // 按访问时间升序排序
-        final sortedKeys = accessKeys..sort((a, b) {
-          return _accessStats[a]!.lastAccessTime.compareTo(_accessStats[b]!.lastAccessTime);
-        });
+        final sortedKeys = accessKeys
+          ..sort((a, b) {
+            return _accessStats[a]!
+                .lastAccessTime
+                .compareTo(_accessStats[b]!.lastAccessTime);
+          });
         // 每次压缩多20项
-        final keysToRemove = sortedKeys.take(_activeCache.length - _maxActiveItems + 20);
+        final keysToRemove =
+            sortedKeys.take(_activeCache.length - _maxActiveItems + 20);
         for (final key in keysToRemove) {
           keysToCompress.add(key);
         }
@@ -331,7 +388,9 @@ class SmartCacheManager {
       for (final key in accessKeys) {
         final lastAccess = _accessStats[key]?.lastAccessTime;
         if (lastAccess == null) continue;
-        if (now.difference(lastAccess) > _inactiveTimeout && _activeCache.containsKey(key) && !keysToCompress.contains(key)) {
+        if (now.difference(lastAccess) > _inactiveTimeout &&
+            _activeCache.containsKey(key) &&
+            !keysToCompress.contains(key)) {
           keysToCompress.add(key);
         }
       }
@@ -390,10 +449,14 @@ class SmartCacheManager {
       if (data is String) {
         // 如果已经是字符串，直接使用
         jsonData = data;
-      } else if (data is Map && data.containsKey('isDynamicObject') && data['isDynamicObject'] == true) {
+      } else if (data is Map &&
+          data.containsKey('isDynamicObject') &&
+          data['isDynamicObject'] == true) {
         // 如果是动态对象，已经JSON序列化
         jsonData = jsonEncode(data);
-      } else if (data is Map && data.containsKey('isModel') && data['isModel'] == true) {
+      } else if (data is Map &&
+          data.containsKey('isModel') &&
+          data['isModel'] == true) {
         // 处理模型对象
         final type = data['type'];
         final modelData = data['data'];
@@ -409,7 +472,8 @@ class SmartCacheManager {
             jsonObject = modelData.toJson();
           }
 
-          jsonData = jsonEncode({'isModel': true, 'type': type, 'data': jsonObject});
+          jsonData =
+              jsonEncode({'isModel': true, 'type': type, 'data': jsonObject});
         } else {
           throw Exception('无法序列化模型对象');
         }
@@ -436,6 +500,62 @@ class SmartCacheManager {
     }
   }
 
+  /// 异步压缩数据并存储
+  Future<void> _compressDataByKeyAsync(String key) async {
+    final data = _activeCache.remove(key);
+    if (data == null) return;
+
+    try {
+      String jsonData;
+
+      if (data is String) {
+        jsonData = data;
+      } else if (data is Map &&
+          data.containsKey('isDynamicObject') &&
+          data['isDynamicObject'] == true) {
+        jsonData = jsonEncode(data);
+      } else if (data is Map &&
+          data.containsKey('isModel') &&
+          data['isModel'] == true) {
+        final type = data['type'];
+        final modelData = data['data'];
+
+        if (modelData != null) {
+          dynamic jsonObject;
+
+          if (modelData is Map<String, dynamic>) {
+            jsonObject = modelData;
+          } else if (modelData.toJson is Function) {
+            jsonObject = modelData.toJson();
+          }
+
+          jsonData =
+              jsonEncode({'isModel': true, 'type': type, 'data': jsonObject});
+        } else {
+          throw Exception('无法序列化模型对象');
+        }
+      } else {
+        jsonData = jsonEncode(data);
+      }
+
+      // 在独立线程中执行压缩
+      final compressedData = await compute((jsonString) {
+        return gzip.encode(utf8.encode(jsonString));
+      }, jsonData);
+
+      // 存储压缩数据
+      _compressedCache[key] = Uint8List.fromList(compressedData);
+      _accessStats.remove(key);
+
+      if (_activeCache.isEmpty) {
+        _stopCleanupTimer();
+      }
+    } catch (e) {
+      cacheLogger('异步压缩缓存时出错: $e');
+      _activeCache[key] = data;
+    }
+  }
+
   /// 解压缩数据
   dynamic _decompressData(String key) {
     Stopwatch? stopwatch = Stopwatch()..start();
@@ -450,7 +570,9 @@ class SmartCacheManager {
         final dynamic decodedData = jsonDecode(jsonString);
 
         // 处理模型对象
-        if (decodedData is Map && decodedData.containsKey('isModel') && decodedData['isModel'] == true) {
+        if (decodedData is Map &&
+            decodedData.containsKey('isModel') &&
+            decodedData['isModel'] == true) {
           final type = decodedData['type'];
           final data = decodedData['data'];
 
@@ -481,8 +603,9 @@ class SmartCacheManager {
             }
           }
           return decodedData;
-        }
-        else if (decodedData is Map && decodedData.containsKey('isDynamicObject') && decodedData['isDynamicObject'] == true) {
+        } else if (decodedData is Map &&
+            decodedData.containsKey('isDynamicObject') &&
+            decodedData['isDynamicObject'] == true) {
           return decodedData;
         }
         return decodedData;
@@ -492,6 +615,73 @@ class SmartCacheManager {
     } finally {
       if (compressedData != null) {
         cacheLogger('解压缩数据 ${stopwatch.elapsedMilliseconds} ms');
+      }
+      stopwatch.stop();
+      stopwatch = null;
+    }
+    return null;
+  }
+
+  /// 异步解压缩数据
+  Future<dynamic> _decompressDataAsync(String key) async {
+    Stopwatch? stopwatch = Stopwatch()..start();
+    final compressedData = _compressedCache.remove(key);
+
+    try {
+      if (compressedData != null) {
+        // 在独立线程中执行解压缩
+        final jsonString = await compute((data) {
+          final decompressedBytes = gzip.decode(data);
+          return utf8.decode(decompressedBytes);
+        }, compressedData);
+
+        // 解析JSON
+        final dynamic decodedData = jsonDecode(jsonString);
+
+        // 处理模型对象
+        if (decodedData is Map &&
+            decodedData.containsKey('isModel') &&
+            decodedData['isModel'] == true) {
+          final type = decodedData['type'];
+          final data = decodedData['data'];
+
+          // 通过注册的工厂函数恢复对象
+          final modelFactory = _modelRegistry[type];
+          if (modelFactory != null && data is Map<String, dynamic>) {
+            try {
+              final restoredObject = modelFactory(data);
+              return {'isModel': true, 'type': type, 'data': restoredObject};
+            } catch (e) {
+              cacheLogger('恢复模型对象时出错: $e');
+              return decodedData;
+            }
+          }
+
+          // 如果没有注册的工厂函数，尝试使用注册的生成器
+          if (_modelGenerator != null && data is Map<String, dynamic>) {
+            try {
+              final restoredObject = _modelGenerator!(type, data);
+              if (restoredObject != null) {
+                return {'isModel': true, 'type': type, 'data': restoredObject};
+              }
+            } catch (e) {
+              cacheLogger('恢复模型对象时出错: $e');
+              return decodedData;
+            }
+          }
+          return decodedData;
+        } else if (decodedData is Map &&
+            decodedData.containsKey('isDynamicObject') &&
+            decodedData['isDynamicObject'] == true) {
+          return decodedData;
+        }
+        return decodedData;
+      }
+    } catch (e) {
+      cacheLogger('异步解压缩数据时出错: $e');
+    } finally {
+      if (compressedData != null) {
+        cacheLogger('异步解压缩数据 ${stopwatch.elapsedMilliseconds} ms');
       }
       stopwatch.stop();
       stopwatch = null;
@@ -540,8 +730,7 @@ class SmartCacheManager {
     AccessStats? oldStats = _accessStats[key];
     if (oldStats == null) {
       _accessStats[key] = AccessStats(count: 0, lastAccessTime: DateTime.now());
-    }
-    else {
+    } else {
       oldStats.lastAccessTime = DateTime.now();
       oldStats.count++;
     }

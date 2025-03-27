@@ -34,7 +34,8 @@ class MemoryComparisonHome extends StatefulWidget {
   _MemoryComparisonHomeState createState() => _MemoryComparisonHomeState();
 }
 
-class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with WidgetsBindingObserver {
+class _MemoryComparisonHomeState extends State<MemoryComparisonHome>
+    with WidgetsBindingObserver {
   // 传统方法 - 直接使用Map存储所有产品
   final Map<String, Product> _traditionalCache = {};
 
@@ -102,7 +103,8 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
       // 加载下一批产品
       if (_currentBatch < _totalBatches) {
         _loadNextBatch();
-      } else if (_currentBatch >= _totalBatches && _currentBatch < _totalBatches + 10) {
+      } else if (_currentBatch >= _totalBatches &&
+          _currentBatch < _totalBatches + 10) {
         // 最后一批加载完毕后，模拟 10 批随机访问
         _simulateRandomAccess();
       } else if (_currentBatch == _totalBatches + 40) {
@@ -114,7 +116,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
   }
 
   // 停止内存监控
-  void _stopMemoryMonitoring({ bool clearCache = true }) {
+  void _stopMemoryMonitoring({bool clearCache = true}) {
     _memoryMonitorTimer?.cancel();
     _memoryMonitorTimer = null;
 
@@ -129,7 +131,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
   }
 
   // 模拟随机访问数据
-  void _simulateRandomAccess() {
+  void _simulateRandomAccess() async {
     final random = Random();
     // 随机访问10个产品
     for (int i = 0; i < 10; i++) {
@@ -139,7 +141,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
       final traditional = _traditionalCache[productId];
 
       // SmartCacheManager访问
-      final smart = _smartCache.getObject<Product>(productId);
+      final smart = await _smartCache.getObjectAsync<Product>(productId);
     }
   }
 
@@ -213,19 +215,21 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
     try {
       // 计算传统缓存的内存使用
       final traditionalUsage = _traditionalCache.values
-                .map((product) => product.memorySize)
-                .fold(0.0, (previousValue, element) => previousValue + element);
+          .map((product) => product.memorySize)
+          .fold(0.0, (previousValue, element) => previousValue + element);
 
       // SmartCache在加载中内存使用较少，之后会压缩不活跃数据
       double smartUsage = 0;
       if (_currentBatch > 0) {
         final stats = _smartCache.getStats();
-        double activeUsage = stats.activeItemsCount * _traditionalCache.values.first.memorySize;
+        double activeUsage =
+            stats.activeItemsCount * _traditionalCache.values.first.memorySize;
         smartUsage = activeUsage + stats.memoryUsage.compressedCache;
       }
 
       setState(() {
-        _traditionalMemoryUsage.add(MemoryUsage(_currentBatch, traditionalUsage));
+        _traditionalMemoryUsage
+            .add(MemoryUsage(_currentBatch, traditionalUsage));
         _smartMemoryUsage.add(MemoryUsage(_currentBatch, smartUsage));
       });
     } catch (e) {
@@ -271,11 +275,12 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
                       Text('内存使用情况概要',
                           style: TextStyle(fontWeight: FontWeight.bold)),
                       SizedBox(height: 8),
-
                       if (_traditionalMemoryUsage.isNotEmpty &&
                           _smartMemoryUsage.isNotEmpty) ...[
-                        Text('传统缓存当前内存: ${_traditionalMemoryUsage.last.usage.toStringAsFixed(2)} KB'),
-                        Text('SmartCache当前内存: ${_smartMemoryUsage.last.usage.toStringAsFixed(2)} KB'),
+                        Text(
+                            '传统缓存当前内存: ${_traditionalMemoryUsage.last.usage.toStringAsFixed(2)} KB'),
+                        Text(
+                            'SmartCache当前内存: ${_smartMemoryUsage.last.usage.toStringAsFixed(2)} KB'),
                         SizedBox(height: 8),
                         Text(
                           '内存节省: ${(_traditionalMemoryUsage.last.usage - _smartMemoryUsage.last.usage).toStringAsFixed(2)} KB (${((_traditionalMemoryUsage.last.usage - _smartMemoryUsage.last.usage) / _traditionalMemoryUsage.last.usage * 100).toStringAsFixed(1)}%)',
@@ -303,7 +308,8 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
 
                       // 获取并显示SmartCache的统计信息
                       Text('活跃缓存项: ${_smartCache.getStats().activeItemsCount}'),
-                      Text('压缩缓存项: ${_smartCache.getStats().compressedItemsCount}'),
+                      Text(
+                          '压缩缓存项: ${_smartCache.getStats().compressedItemsCount}'),
                       Text('总缓存项: ${_smartCache.getStats().totalItemsCount}'),
                     ],
                   ),
@@ -322,9 +328,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
             SizedBox(height: 10),
 
             ElevatedButton(
-              onPressed: _isRunningTest
-                  ? () => _stopMemoryMonitoring()
-                  : null,
+              onPressed: _isRunningTest ? () => _stopMemoryMonitoring() : null,
               child: Text('停止测试'),
             ),
 
@@ -337,10 +341,10 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome> with Widget
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('测试说明',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    Text('测试说明', style: TextStyle(fontWeight: FontWeight.bold)),
                     SizedBox(height: 8),
-                    Text('1. 测试将分批加载 ${_productsPerBatch * _totalBatches} 个复杂产品对象'),
+                    Text(
+                        '1. 测试将分批加载 ${_productsPerBatch * _totalBatches} 个复杂产品对象'),
                     Text('2. 每个产品包含多个变体和大量属性数据'),
                     Text('3. 加载完成后会模拟随机访问部分产品'),
                     Text('4. 图表展示传统方法与SmartCacheManager的内存使用对比'),
@@ -473,7 +477,8 @@ class MemoryUsageChart extends StatelessWidget {
             border: Border.all(color: const Color(0xff37434d), width: 1),
           ),
           minX: 0,
-          maxX: traditionalUsage.isNotEmpty ? traditionalUsage.length - 1.0 : 10,
+          maxX:
+              traditionalUsage.isNotEmpty ? traditionalUsage.length - 1.0 : 10,
           minY: 0,
           maxY: traditionalUsage.isNotEmpty
               ? traditionalUsage.map((e) => e.usage).reduce(max) * 1.2
@@ -514,7 +519,8 @@ class MemoryUsageChart extends StatelessWidget {
             touchTooltipData: LineTouchTooltipData(
               getTooltipItems: (List<LineBarSpot> touchedSpots) {
                 return touchedSpots.map((spot) {
-                  final String label = spot.barIndex == 0 ? '传统缓存' : 'SmartCache';
+                  final String label =
+                      spot.barIndex == 0 ? '传统缓存' : 'SmartCache';
                   return LineTooltipItem(
                     '$label: ${spot.y.toStringAsFixed(1)} KB',
                     TextStyle(
