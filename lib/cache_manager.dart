@@ -62,8 +62,10 @@ class SmartCacheManager {
   final Map<String, Function(Map<String, dynamic>)> _modelRegistry = {};
   dynamic Function(String type, Map<String, dynamic>)? _modelGenerator;
 
+  // 用于异步压缩数据的后台处理器
+  final _compressProcessor = BackgroundProcessor(poolSize: 2);
   // 用于异步解压缩数据的后台处理器
-  final _backgroundProcessor = BackgroundProcessor(poolSize: 2);
+  final _decompressProcessor = BackgroundProcessor(poolSize: 1);
 
   /// 注册模型转换器
   ///
@@ -544,7 +546,7 @@ class SmartCacheManager {
 
       // 在独立线程中执行压缩
       List<int> compressedData =
-        await _backgroundProcessor.execute<String, List<int>>(_zipString, jsonData);
+        await _compressProcessor.execute<String, List<int>>(_zipString, jsonData);
 
       // 存储压缩数据
       _compressedCache[key] = Uint8List.fromList(compressedData);
@@ -633,7 +635,7 @@ class SmartCacheManager {
       if (compressedData != null) {
         // 在独立线程中执行解压缩
         String jsonString =
-          await _backgroundProcessor.execute<List<int>, String>(_unzipString, compressedData);
+          await _decompressProcessor.execute<List<int>, String>(_unzipString, compressedData);
 
         // 解析JSON
         final dynamic decodedData = jsonDecode(jsonString);
@@ -793,7 +795,8 @@ class SmartCacheManager {
 
   /// 析构函数
   void dispose() {
-    _backgroundProcessor.dispose();
+    _decompressProcessor.dispose();
+    _compressProcessor.dispose();
     _shallowCleanTimer?.cancel();
     _shallowCleanTimer = null;
     _compressedCache.clear();
