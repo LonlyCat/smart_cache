@@ -16,7 +16,7 @@ void Function(String? message, { int? wrapWidth }) cacheLogger = debugPrint;
 /// 自动管理活跃和非活跃数据
 class SmartCacheManager {
 
-  static final SmartCacheManager standard = SmartCacheManager();
+  static SmartCacheManager standard = SmartCacheManager();
 
   // 配置参数
   final bool _enableDiskCache; // 是否启用磁盘缓存
