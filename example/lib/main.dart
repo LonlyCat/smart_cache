@@ -40,7 +40,9 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome>
   final Map<String, Product> _traditionalCache = {};
 
   // 使用SmartCacheManager
-  final SmartCacheManager _smartCache = SmartCacheManager.standard;
+  final SmartCacheManager _smartCache = SmartCacheManager(
+    inactiveTimeout: Duration(seconds: 2),
+  );
 
   // 内存使用数据
   List<MemoryUsage> _traditionalMemoryUsage = [];

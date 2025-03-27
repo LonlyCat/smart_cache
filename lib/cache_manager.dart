@@ -1,4 +1,7 @@
+import 'dart:math';
+
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:smart_cache/background_processor.dart';
 import 'package:smart_cache/model/access_stats.dart';
 import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
@@ -58,6 +61,9 @@ class SmartCacheManager {
   // 模型注册表 - 用于反序列化
   final Map<String, Function(Map<String, dynamic>)> _modelRegistry = {};
   dynamic Function(String type, Map<String, dynamic>)? _modelGenerator;
+
+  // 用于异步解压缩数据的后台处理器
+  final _backgroundProcessor = BackgroundProcessor(poolSize: 2);
 
   /// 注册模型转换器
   ///
@@ -358,7 +364,7 @@ class SmartCacheManager {
   /// 将不活跃数据压缩
   ///
   /// [forced] 强制压缩所有数据
-  void compressInactiveData({bool forced = false}) {
+  void compressInactiveData({bool forced = false}) async {
     final now = DateTime.now();
     List<String> keysToCompress = [];
 
@@ -397,16 +403,14 @@ class SmartCacheManager {
     }
 
     // 压缩数据
-    for (final key in keysToCompress) {
-      if (_activeCache.containsKey(key)) {
-        _compressDataByKey(key);
-      }
-    }
-
-    cacheLogger('SmartCacheManage'
-        '\n压缩了 ${keysToCompress.length} 项数据'
-        '\n当前还有 ${_activeCache.length} 项活跃数据'
-        '\n当前还有 ${_compressedCache.length} 项压缩数据');
+    Future.wait(keysToCompress.where((e) => keysToCompress.contains(e)).map((key) {
+      return _compressDataByKeyAsync(key);
+    })).then((_) {
+      cacheLogger('SmartCacheManage'
+          '\n压缩了 ${keysToCompress.length} 项数据'
+          '\n当前还有 ${_activeCache.length} 项活跃数据'
+          '\n当前还有 ${_compressedCache.length} 项压缩数据');
+    });
   }
 
   /// 将所有压缩数据存储到磁盘
@@ -483,7 +487,7 @@ class SmartCacheManager {
       }
 
       // 压缩数据
-      final compressedData = gzip.encode(utf8.encode(jsonData));
+      final compressedData = _zipString(jsonData);
       // 存储压缩数据
       _compressedCache[key] = Uint8List.fromList(compressedData);
 
@@ -502,7 +506,7 @@ class SmartCacheManager {
 
   /// 异步压缩数据并存储
   Future<void> _compressDataByKeyAsync(String key) async {
-    final data = _activeCache.remove(key);
+    final data = _activeCache[key];
     if (data == null) return;
 
     try {
@@ -539,12 +543,12 @@ class SmartCacheManager {
       }
 
       // 在独立线程中执行压缩
-      final compressedData = await compute((jsonString) {
-        return gzip.encode(utf8.encode(jsonString));
-      }, jsonData);
+      List<int> compressedData =
+        await _backgroundProcessor.execute<String, List<int>>(_zipString, jsonData);
 
       // 存储压缩数据
       _compressedCache[key] = Uint8List.fromList(compressedData);
+      _activeCache.remove(key);
       _accessStats.remove(key);
 
       if (_activeCache.isEmpty) {
@@ -562,10 +566,8 @@ class SmartCacheManager {
     final compressedData = _compressedCache.remove(key);
     try {
       if (compressedData != null) {
-        // 解压数据
-        final decompressedBytes = gzip.decode(compressedData);
-        // 将字节转换回JSON字符串
-        final jsonString = utf8.decode(decompressedBytes);
+        // 解压数据,将字节转换回JSON字符串
+        final jsonString = _unzipString(compressedData);
         // 解析JSON
         final dynamic decodedData = jsonDecode(jsonString);
 
@@ -630,10 +632,8 @@ class SmartCacheManager {
     try {
       if (compressedData != null) {
         // 在独立线程中执行解压缩
-        final jsonString = await compute((data) {
-          final decompressedBytes = gzip.decode(data);
-          return utf8.decode(decompressedBytes);
-        }, compressedData);
+        String jsonString =
+          await _backgroundProcessor.execute<List<int>, String>(_unzipString, compressedData);
 
         // 解析JSON
         final dynamic decodedData = jsonDecode(jsonString);
@@ -793,9 +793,19 @@ class SmartCacheManager {
 
   /// 析构函数
   void dispose() {
+    _backgroundProcessor.dispose();
     _shallowCleanTimer?.cancel();
     _shallowCleanTimer = null;
-    _activeCache.clear();
     _compressedCache.clear();
+    _activeCache.clear();
   }
+}
+
+
+List<int> _zipString(String string) {
+  return gzip.encode(utf8.encode(string));
+}
+
+String _unzipString(List<int> bytes) {
+  return utf8.decode(gzip.decode(bytes));
 }
