@@ -7,7 +7,15 @@ import 'dart:math';
 import 'package:smart_cache/smart_cache.dart';
 import 'package:smart_cache_example/models/product.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await SmartCacheManager.initialize(
+    config: SmartCacheConfig(
+      l1DowngradeDuration: const Duration(seconds: 5),
+      l2DowngradeDuration: const Duration(seconds: 15),
+      maintenanceInterval: const Duration(seconds: 10),
+    ),
+  );
   runApp(const MemoryComparisonApp());
 }
 
@@ -40,9 +48,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome>
   final Map<String, Product> _traditionalCache = {};
 
   // 使用SmartCacheManager
-  final SmartCacheManager _smartCache = SmartCacheManager(
-    inactiveTimeout: Duration(seconds: 2),
-  );
+  final SmartCacheManager _smartCache = SmartCacheManager.instance;
 
   // 内存使用数据
   List<MemoryUsage> _traditionalMemoryUsage = [];
@@ -67,15 +73,11 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome>
     WidgetsBinding.instance.addObserver(this);
 
     // 初始化SmartCache
-    //
-    // 可以使用模型表
-    // _smartCache.registerModel<Product>(Product.fromJson);
-    // _smartCache.registerModel<Variant>(Variant.fromJson);
     // 也可以使用模型生成器
-    _smartCache.registerModelGenerator((type, json) {
-      if (type == 'Product') {
+    _smartCache.registerFromJsonFactorFactory((type, json) {
+      if (type == Product) {
         return Product.fromJson(json);
-      } else if (type == 'Variant') {
+      } else if (type == Variant) {
         return Variant.fromJson(json);
       }
       return null;
@@ -143,7 +145,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome>
       final traditional = _traditionalCache[productId];
 
       // SmartCacheManager访问
-      final smart = await _smartCache.getObjectAsync<Product>(productId);
+      final smart = await _smartCache.get<Product>(productId);
     }
   }
 
@@ -158,7 +160,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome>
       _traditionalCache[productId] = product;
 
       // 存储到SmartCache
-      _smartCache.putObject<Product>(productId, product);
+      _smartCache.put<Product>(productId, product);
     }
   }
 
@@ -217,16 +219,15 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome>
     try {
       // 计算传统缓存的内存使用
       final traditionalUsage = _traditionalCache.values
-          .map((product) => product.memorySize)
-          .fold(0.0, (previousValue, element) => previousValue + element);
+          .fold(0.0, (previousValue, element) => previousValue + element.memorySize);
 
       // SmartCache在加载中内存使用较少，之后会压缩不活跃数据
       double smartUsage = 0;
       if (_currentBatch > 0) {
         final stats = _smartCache.getStats();
-        double activeUsage =
-            stats.activeItemsCount * _traditionalCache.values.first.memorySize;
-        smartUsage = activeUsage + stats.memoryUsage.compressedCache;
+        double activeUsage = stats.l1Cache.values
+            .fold(0.0, (previousValue, element) => previousValue + element.memorySize);
+        smartUsage = activeUsage + stats.l2CacheBytes;
       }
 
       setState(() {
@@ -241,6 +242,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome>
 
   @override
   Widget build(BuildContext context) {
+    CacheStats stats = _smartCache.getStats();
     return Scaffold(
       appBar: AppBar(
         title: Text('内存优化对比'),
@@ -296,7 +298,6 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome>
                   ),
                 ),
               ),
-
               SizedBox(height: 20),
               Card(
                 child: Padding(
@@ -309,10 +310,10 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome>
                       SizedBox(height: 8),
 
                       // 获取并显示SmartCache的统计信息
-                      Text('活跃缓存项: ${_smartCache.getStats().activeItemsCount}'),
-                      Text(
-                          '压缩缓存项: ${_smartCache.getStats().compressedItemsCount}'),
-                      Text('总缓存项: ${_smartCache.getStats().totalItemsCount}'),
+                      Text('活跃缓存项: ${stats.l1Count}'),
+                      Text('压缩缓存项: ${stats.l2Count}'),
+                      Text('磁盘缓存项: ${stats.l3Count}'),
+                      Text('总计缓存项: ${stats.totalCount}'),
                     ],
                   ),
                 ),

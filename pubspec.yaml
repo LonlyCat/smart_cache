@@ -1,6 +1,6 @@
 name: smart_cache
 description: "Smart Cache is a comprehensive caching solution that supports memory caching, compressed caching, and disk caching. It automatically manages active and inactive data to optimize performance."
-version: 0.0.1
+version: 1.0.0
 homepage:
 
 environment:
@@ -10,10 +10,16 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_cache_manager: ^3.3.1
   crypto: 3.0.3
+  hive_flutter: ^1.1.0
+  hive: ^2.2.3
+  path_provider: ^2.0.15
+  logger: ^2.0.2+1
+  path: ^1.9.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  hive_ce_generator: ^1.8.2
+  build_runner: ^2.4.15
