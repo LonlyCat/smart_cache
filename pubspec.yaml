@@ -1,6 +1,6 @@
 name: smart_cache
 description: "Smart Cache is a comprehensive caching solution that supports memory caching, compressed caching, and disk caching. It automatically manages active and inactive data to optimize performance."
-version: 0.0.1
+version: 1.0.0
 homepage:
 
 environment:
