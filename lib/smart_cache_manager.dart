@@ -96,7 +96,7 @@ class SmartCacheManager {
               lineLength: 80,
               colors: true,
               printEmojis: true,
-              dateTimeFormat: DateTimeFormat.dateAndTime), // 通过配置控制日志级别
+              printTime: true), // 通过配置控制日志级别
         );
 
   // --- 初始化辅助方法 ---
