@@ -82,9 +82,23 @@ class DiskCacheManager {
   }
 
   /// 从磁盘缓存中获取数据和元数据。如果未找到或过期，则返回 null。
+  /// 异步方法，会确保在调用前初始化。
+  ///
   /// 返回一个 L3HiveEntry 对象，包含压缩数据和元数据。
   Future<L3HiveEntry?> get(String key) async {
     await _ensureInitialized();
+    return getSync(key);
+  }
+
+  /// 从磁盘缓存中获取数据和元数据。如果未找到或过期，则返回 null。
+  /// 注意：此方法是同步的，当 hive 未初始化完成时访问会返回空。
+  ///
+  /// 返回一个 L3HiveEntry 对象，包含压缩数据和元数据。
+  L3HiveEntry? getSync(String key) {
+    // 如果未初始化完成，返回 null
+    if (!_isInitialized) {
+      return null;
+    }
     try {
       L3HiveEntry? entry;
       final Map? entryMap = _box!.get(key);
@@ -102,7 +116,7 @@ class DiskCacheManager {
       // 检查过期时间
       if (metaData.isExpired) {
         debugPrint("磁盘缓存：获取键 '$key' - 已找到但已过期（${metaData.expiryTime}）。正在移除。");
-        await remove(key); // 清理过期条目
+        remove(key); // 清理过期条目
         return null;
       }
 

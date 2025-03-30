@@ -250,10 +250,9 @@ class SmartCacheManager {
     return null;
   }
 
-  /// 仅从 L1 缓存同步检索项。
-  /// 如果在 L1 中未找到或类型不匹配，则返回 null。
-  /// 适用于磁盘延迟不可接受的即时访问场景。
-  T? getSync<T>(String key) {
+  /// 通过键检索缓存项。
+  /// 注意: 当 [deepSearch] 为 true 时，L2 和 L3 将使用同步 API 搜索，可能会阻塞 UI 线程。
+  T? getSync<T>(String key, { bool deepSearch = false }) {
     _logDebug("同步获取请求：键 '$key'，类型 $T");
     L1CacheEntry? l1Entry = _l1Cache[key];
     if (l1Entry != null) {
@@ -263,17 +262,115 @@ class SmartCacheManager {
         return l1Entry.value as T;
       } else {
         _logWarning("L1 同步命中：键 '$key'，但类型不匹配。预期 $T，实际 ${l1Entry.originalType}。");
-        // 这里不移除，让异步 `get` 或维护任务处理
+        remove(key); // 移除不一致的条目
         return null;
       }
     }
     _logDebug("L1 同步未命中：键 '$key'。");
+    if (!deepSearch) {
+      return null; // 如果不深度搜索，直接返回 null
+    }
+
+    // 2. 检查 L2（压缩内存缓存）
+    L2CacheEntry? l2Entry = _l2Cache[key];
+    if (l2Entry != null) {
+      // 在解压缩前检查类型兼容性
+      if (l2Entry.originalType == T) {
+        _logDebug("L2 命中：键 '$key'。正在解压缩并提升到 L1。");
+        try {
+          // 在主线程解压缩
+          final String jsonData = _compressionUtils.decompressSync(l2Entry.compressedData);
+
+          // 反序列化
+          final T? value = _deserialize<T>(jsonData);
+
+          if (value != null) {
+            // 提升到 L1
+            final newL1Entry = L1CacheEntry<T>(
+              key: key,
+              value: value,
+              originalType: T, // 使用请求的类型 T
+            );
+            _l1Cache[key] = newL1Entry;
+            _l2Cache.remove(key); // 成功提升后从 L2 移除
+            _logDebug("L2 -> L1 提升成功：键 '$key'。");
+            return value;
+          } else {
+            // 反序列化失败（例如，缺少工厂或 JSON 无效）
+            _logError("L2 命中：键 '$key'，但反序列化失败。移除条目。");
+            remove(key); // 移除损坏/不可用的条目
+            return null;
+          }
+        } catch (e, s) {
+          _logError("处理 L2 条目时出错：键 '$key'。移除条目。", e, s);
+          remove(key); // 出错时移除
+          return null;
+        }
+      } else {
+        _logWarning("L2 命中：键 '$key'，但类型不匹配。预期 $T，实际 ${l2Entry.originalType}。丢弃条目。");
+        remove(key);
+        return null;
+      }
+    }
+
+    // 3. 检查 L3（磁盘缓存）
+    try {
+      final l3Result = _diskCacheManager.getSync(key);
+      if (l3Result != null) {
+        // 检查类型兼容性
+        if (l3Result.metaData.originalType == T.toString()) {
+          _logDebug("L3 命中：键 '$key'。正在解压缩并提升到 L1。");
+          try {
+            // 解压缩
+            final String jsonData = _compressionUtils.decompressSync(l3Result.compressedData);
+            // 反序列化
+            final T? value = _deserialize<T>(jsonData);
+
+            if (value != null) {
+              // 提升到 L1
+              final newL1Entry = L1CacheEntry<T>(
+                key: key,
+                value: value,
+                originalType: T,
+              );
+              _l1Cache[key] = newL1Entry;
+              // 可选：在提升后立即从 L3 移除？
+              // 或者让过期机制处理？为简单起见，交给过期处理。
+              // await _diskCacheManager.remove(key);
+              _logDebug("L3 -> L1 提升成功：键 '$key'。");
+              // 如果定时器当前未运行，则启动它
+              _ensureMaintenanceTimerRunning();
+              return value;
+            } else {
+              _logError("L3 命中：键 '$key'，但反序列化失败。移除条目。");
+              remove(key); // 从磁盘移除损坏的条目
+              return null;
+            }
+          } catch (e, s) {
+            _logError("处理 L3 条目时出错：键 '$key'。移除条目。", e, s);
+            remove(key); // 出错时移除
+            return null;
+          }
+        } else {
+          _logWarning("L3 命中：键 '$key'，但类型不匹配。预期 $T，实际 $T。丢弃条目。");
+          remove(key); // 从磁盘移除不一致的类型
+          return null;
+        }
+      }
+    } catch (e, s) {
+      _logError("访问 L3 磁盘缓存时出错：键 '$key'。", e, s);
+      // 这里不移除键，因为磁盘缓存可能只是暂时不可用
+      return null; // 如果磁盘访问失败，返回 null
+    }
+
+    // 4. 在任何缓存中都未找到
+    _logDebug("缓存未命中：键 '$key'。");
     return null;
   }
 
   /// 在 L1 缓存中添加或更新项。
   /// 检查对象是否具有 `toJson` 方法。
-  /// 如果键存在于 L2 和 L3 中，则从中移除。
+  /// 如果键存在于 L2 中，则从中移除。
   Future<void> put<T>(String key, T value) async {
     _logDebug("放入请求：键 '$key'，类型 $T");
 
