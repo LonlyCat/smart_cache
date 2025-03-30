@@ -40,12 +40,12 @@ class SmartCacheConfig {
         l2DowngradeDuration <= Duration.zero ||
         l3DefaultExpiryDuration <= Duration.zero ||
         maintenanceInterval <= Duration.zero) {
-      throw ArgumentError("Cache durations and interval must be positive.");
+      throw ArgumentError("缓存持续时间和间隔必须为正数");
     }
     if (l1DowngradeDuration >= l2DowngradeDuration) {
-      // Warning or specific logic, L2 might not be very effective
+      // 警告或特定逻辑，L2 可能效果不佳
       debugPrint("Warning: l1DowngradeDuration is >= l2DowngradeDuration. "
-          "Consider adjusting timings for optimal L2 usage.");
+          "考虑调整时间安排以实现二级缓存的最佳使用.");
     }
   }
 }

@@ -1,15 +1,13 @@
-
-
-import 'package:flutter/foundation.dart'; // For compute
+import 'package:flutter/foundation.dart'; // 用于 compute
 import 'dart:convert';
 import 'dart:io';
 
 import 'model/cache_exceptions.dart';
 
-// --- Isolate Payload Structures ---
+// --- 隔离线程负载结构 ---
 
 class _CompressionPayload {
-  final String jsonData; // 将对象预先转为 JSON String 传递
+  final String jsonData; // 将对象预先转为 JSON 字符串传递
   _CompressionPayload(this.jsonData);
 }
 
@@ -19,53 +17,51 @@ class _DecompressionPayload {
 }
 
 class _BatchCompressionPayload {
-  // Map where Key is the original cache key, Value is the JSON string to compress
+  // 映射，其中键是原始缓存键，值是待压缩的 JSON 字符串
   final Map<String, String> dataToCompress;
   _BatchCompressionPayload(this.dataToCompress);
 }
 
-// --- Top-Level Functions for Isolate Execution ---
+// --- 用于隔离线程执行的顶级函数 ---
 
-// 注意：Isolate 不能直接访问主 Isolate 的内存或函数闭包
+// 注意：隔离线程无法直接访问主隔离线程的内存或函数闭包
 // 它们需要是顶级函数或静态方法
 
-/// 隔离兼容压缩函数
+/// 隔离线程兼容的压缩函数
 Future<Uint8List> _compressIsolate(_CompressionPayload payload) async {
   try {
-    // 1. Encode String to UTF8 bytes
+    // 1. 将字符串编码为 UTF8 字节
     final List<int> utf8Bytes = utf8.encode(payload.jsonData);
-    // 2. Compress using GZip
+    // 2. 使用 GZip 压缩
     final List<int> compressedBytes = gzip.encode(utf8Bytes);
-    // 3. Return as Uint8List
+    // 3. 返回 Uint8List
     return Uint8List.fromList(compressedBytes);
   } catch (e, s) {
-    // Isolate 内无法直接抛出复杂异常给主 Isolate，通常返回错误标记或 null
-    // 这里我们选择重新抛出，由 compute 的 Future 捕获
+    // 隔离线程内无法直接抛出复杂异常给主隔离线程，通常返回错误标记或 null
+    // 这里选择重新抛出，由 compute 的 Future 捕获
     // 或者可以返回一个包含错误信息的特定对象
-    debugPrint("Compression error in isolate: $e\n$s");
-    throw CompressionException("Failed to compress data in isolate", originalException: e, stackTrace: s);
-    // return Uint8List(0); // Indicate error with empty list? Needs handling in caller
+    debugPrint("隔离线程中的压缩错误: $e\n$s");
+    throw CompressionException("在隔离线程中压缩数据失败", originalException: e, stackTrace: s);
   }
 }
 
-/// 与隔离兼容的解压缩功能
+/// 与隔离线程兼容的解压缩函数
 Future<String> _decompressIsolate(_DecompressionPayload payload) async {
   try {
-    // 1. Decompress using GZip
+    // 1. 使用 GZip 解压缩
     final List<int> decompressedBytes = gzip.decode(payload.compressedData);
-    // 2. Decode UTF8 bytes to String
+    // 2. 将 UTF8 字节解码为字符串
     final String jsonData = utf8.decode(decompressedBytes);
     return jsonData;
   } catch (e, s) {
-    debugPrint("Decompression error in isolate: $e\n$s");
-    throw CompressionException("Failed to decompress data in isolate", originalException: e, stackTrace: s);
-    // return ""; // Indicate error with empty string? Needs handling in caller
+    debugPrint("隔离线程中的解压缩错误: $e\n$s");
+    throw CompressionException("在隔离线程中解压缩数据失败", originalException: e, stackTrace: s);
   }
 }
 
-/// 在单个隔离区内压缩多个 JSON 字符串
+/// 在单个隔离线程中压缩多个 JSON 字符串
 /// 返回一个映射，其中键与输入键匹配，值为压缩后的数据
-/// 单个项目的压缩失败会被记录下来并跳过（结果中不包含该键）
+/// 单个项目的压缩失败会被记录并跳过（结果中不包含该键）
 Future<Map<String, Uint8List>> _compressBatchIsolate(_BatchCompressionPayload payload) async {
   final Map<String, Uint8List> results = {};
   for (final entry in payload.dataToCompress.entries) {
@@ -76,87 +72,87 @@ Future<Map<String, Uint8List>> _compressBatchIsolate(_BatchCompressionPayload pa
       final List<int> compressedBytes = gzip.encode(utf8Bytes);
       results[key] = Uint8List.fromList(compressedBytes);
     } catch (e, s) {
-      debugPrint("Compression error in isolate for batch item key '$key': $e\n$s");
+      debugPrint("隔离线程中批量项键 '$key' 的压缩错误: $e\n$s");
     }
   }
   return results;
 }
 
-// --- Compression Utility Class ---
+// --- 压缩工具类 ---
 
 class CompressionUtils {
   final bool _useIsolate;
 
   CompressionUtils({required bool useIsolate}) : _useIsolate = useIsolate;
 
-  /// Compresses a JSON string into GZipped Uint8List.
-  /// Handles running in an isolate via compute() if configured.
+  /// 将 JSON 字符串压缩为 GZipped Uint8List。
+  /// 如果配置了隔离线程，则通过 compute() 在隔离线程中运行。
   Future<Uint8List> compress(String jsonData) async {
     if (_useIsolate) {
       try {
-        // compute 会自动处理 Isolate 的创建、通信和销毁
+        // compute 会自动处理隔离线程的创建、通信和销毁
         return await compute(_compressIsolate, _CompressionPayload(jsonData));
       } catch (e, s) {
-        if (e is CompressionException) rethrow; // Propagate specific exception
-        // Wrap other compute errors
-        throw CompressionException("Error during isolated compression", originalException: e, stackTrace: s);
+        if (e is CompressionException) rethrow; // 传播特定异常
+        // 包装其他 compute 错误
+        throw CompressionException("隔离线程压缩期间出错", originalException: e, stackTrace: s);
       }
     } else {
-      // Synchronous execution on the current thread
+      // 在当前线程上同步执行
       try {
         final List<int> utf8Bytes = utf8.encode(jsonData);
         final List<int> compressedBytes = gzip.encode(utf8Bytes);
         return Uint8List.fromList(compressedBytes);
       } catch (e, s) {
-        throw CompressionException("Error during synchronous compression", originalException: e, stackTrace: s);
+        throw CompressionException("同步压缩期间出错", originalException: e, stackTrace: s);
       }
     }
   }
 
-  /// Decompresses GZipped Uint8List back into a JSON string.
-  /// Handles running in an isolate via compute() if configured.
-  /// Note: JSON parsing and object deserialization happens *after* this.
+  /// 将 GZipped Uint8List 解压缩回 JSON 字符串。
+  /// 如果配置了隔离线程，则通过 compute() 在隔离线程中运行。
+  /// 注意：JSON 解析和对象反序列化在此之后进行。
   Future<String> decompress(Uint8List compressedData) async {
     if (compressedData.isEmpty) {
-      throw CompressionException("Cannot decompress empty data.");
+      throw CompressionException("无法解压缩空数据。");
     }
     if (_useIsolate) {
       try {
         return await compute(_decompressIsolate, _DecompressionPayload(compressedData));
       } catch (e, s) {
         if (e is CompressionException) rethrow;
-        throw CompressionException("Error during isolated decompression", originalException: e, stackTrace: s);
+        throw CompressionException("隔离线程解压缩期间出错", originalException: e, stackTrace: s);
       }
     } else {
-      // Synchronous execution
+      // 同步执行
       try {
         final List<int> decompressedBytes = gzip.decode(compressedData);
         return utf8.decode(decompressedBytes);
       } catch (e, s) {
-        throw CompressionException("Error during synchronous decompression", originalException: e, stackTrace: s);
+        throw CompressionException("同步解压缩期间出错", originalException: e, stackTrace: s);
       }
     }
   }
 
-  /// Uses a single `compute` call for efficiency if isolates are enabled.
-  /// Takes a map of {cacheKey: jsonData} and returns a map of {cacheKey: compressedData}.
-  /// Keys for which compression failed in the isolate will be missing from the result map.
+  /// 如果启用了隔离线程，则使用单个 `compute` 调用以提高效率。
+  /// 接收 {cacheKey: jsonData} 映射，返回 {cacheKey: compressedData} 映射。
+  /// 在隔离线程中压缩失败的键将从结果映射中缺失。
   Future<Map<String, Uint8List>> compressBatch(Map<String, String> jsonDataMap) async {
     if (jsonDataMap.isEmpty) {
-      return {}; // Nothing to do
+      return {}; // 无需操作
     }
 
     if (_useIsolate) {
       try {
-        // Pass the entire map to the batch isolate function
+        // 将整个映射传递给批量隔离函数
         return await compute(_compressBatchIsolate, _BatchCompressionPayload(jsonDataMap));
       } catch (e, s) {
-        // This catches errors if the compute call itself fails (e.g., isolate crash)
-        // Individual item errors inside the isolate are handled by omission from the result map.
-        throw CompressionException("Error during isolated batch compression execution", originalException: e, stackTrace: s);
+        // 如果 compute 调用本身失败（例如隔离线程崩溃），则捕获错误
+        // 隔离线程内单个项的错误通过从结果映射中省略来处理。
+        throw CompressionException("隔离线程批量压缩执行期间出错", originalException: e, stackTrace: s);
       }
     } else {
-      // Synchronous execution on the current thread
+      // 在当前线程上同步执行
       final Map<String, Uint8List> results = {};
       for (final entry in jsonDataMap.entries) {
         final key = entry.key;
@@ -166,35 +162,34 @@ class CompressionUtils {
           final List<int> compressedBytes = gzip.encode(utf8Bytes);
           results[key] = Uint8List.fromList(compressedBytes);
         } catch (e, s) {
-          // Log synchronous error and skip item
-          debugPrint("Synchronous compression error for batch item key '$key': $e\n$s");
-          // Optionally rethrow or use a more sophisticated error handling/reporting mechanism
+          // 记录同步错误并跳过该项
+          debugPrint("同步压缩批量项键 '$key' 的错误: $e\n$s");
         }
       }
       return results;
     }
   }
 
-  // --- Synchronous versions (might block UI if data is large/CPU is slow) ---
+  // --- 同步版本（如果数据量大或 CPU 慢，可能会阻塞 UI） ---
   Uint8List compressSync(String jsonData) {
     try {
       final List<int> utf8Bytes = utf8.encode(jsonData);
       final List<int> compressedBytes = gzip.encode(utf8Bytes);
       return Uint8List.fromList(compressedBytes);
     } catch (e, s) {
-      throw CompressionException("Error during synchronous compression", originalException: e, stackTrace: s);
+      throw CompressionException("同步压缩期间出错", originalException: e, stackTrace: s);
     }
   }
 
   String decompressSync(Uint8List compressedData) {
     if (compressedData.isEmpty) {
-      throw CompressionException("Cannot decompress empty data.");
+      throw CompressionException("无法解压缩空数据。");
     }
     try {
       final List<int> decompressedBytes = gzip.decode(compressedData);
       return utf8.decode(decompressedBytes);
     } catch (e, s) {
-      throw CompressionException("Error during synchronous decompression", originalException: e, stackTrace: s);
+      throw CompressionException("同步解压缩期间出错", originalException: e, stackTrace: s);
     }
   }
 }
