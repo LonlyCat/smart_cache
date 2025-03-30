@@ -1,4 +1,4 @@
-import 'package:smart_cache/cache_manager.dart';
+import 'package:smart_cache/smart_cache_manager.dart';
 import 'package:flutter/foundation.dart';
 
 /// 缓存加载状态枚举
@@ -68,12 +68,12 @@ class CacheableLoader {
     // 确保 cacheOnly 和 loaderOnly 不同时为 true
     assert(!cacheOnly || !loaderOnly, 'cacheOnly 和 loaderOnly 不能同时为 true');
     // 使用提供的缓存管理器或标准缓存管理器
-    cacheManager ??= SmartCacheManager.standard;
+    cacheManager ??= SmartCacheManager.instance;
 
     // 如果不是只从加载器加载，尝试从缓存获取数据
     if (!loaderOnly) {
       try {
-        final cachedData = await cacheManager.getObjectAsync<T>(key);
+        final cachedData = await cacheManager.get<T>(key);
         if (cachedData != null || cacheOnly) {
           // 缓存中有数据，返回缓存数据
           yield CacheableLoadResult.fromCache(cachedData);
@@ -94,7 +94,7 @@ class CacheableLoader {
       }
       // 将数据存入缓存
       if (willCache && loadedData != null) {
-        cacheManager.putObject<T>(key, loadedData);
+        cacheManager.put<T>(key, loadedData);
       }
       // 返回加载器数据
       yield CacheableLoadResult.fromLoader(loadedData);
@@ -125,12 +125,12 @@ class CacheableLoader {
     // 确保 cacheOnly 和 loaderOnly 不同时为 true
     assert(!cacheOnly || !loaderOnly, 'cacheOnly 和 loaderOnly 不能同时为 true');
     // 使用提供的缓存管理器或标准缓存管理器
-    cacheManager ??= SmartCacheManager.standard;
+    cacheManager ??= SmartCacheManager.instance;
 
     // 如果不是只从加载器加载，尝试从缓存获取数据
     if (!loaderOnly) {
       try {
-        final cachedData = await cacheManager.getObjectAsync<T>(key);
+        final cachedData = await cacheManager.get<T>(key);
         if (cachedData != null || cacheOnly) {
           // 缓存中有数据，返回缓存数据
           return CacheableLoadResult.fromCache(cachedData);
@@ -150,7 +150,7 @@ class CacheableLoader {
       // 将数据存入缓存
       if (willCache && loadedData != null) {
         // 返回加载器数据
-        cacheManager.putObject<T>(key, loadedData);
+        cacheManager.put<T>(key, loadedData);
       }
       return CacheableLoadResult.fromLoader(loadedData);
     } catch (e) {
