@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 
@@ -183,18 +184,19 @@ class BackgroundProcessor {
     if (_isDisposed) {
       return Future.error(StateError('BackgroundProcessor is disposed'));
     }
-    if (_initCompleter != null) {
-      // 如果还没初始化完成，先等待
-      return _initCompleter!.future.then((_) => execute(function, payload));
-    }
-
     final taskId = _taskIdCounter++;
     final completer = Completer<R>();
     final taskData = _WorkerTask(taskId, function, payload);
     final task = _Task<R>(taskId, completer, taskData);
 
     _taskQueue.add(task); // 加入任务队列
-    _tryDispatch(); // 尝试立即分发
+    if (_initCompleter != null) {
+      // 如果还没初始化完成，先等待
+      _initCompleter!.future.then((_) => _tryDispatch());
+    }
+    else {
+      _tryDispatch(); // 尝试立即分发
+    }
 
     return completer.future;
   }
