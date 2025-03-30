@@ -7,11 +7,26 @@ import 'dart:async';
 import 'model/cache_exceptions.dart';
 import 'model/cache_entry.dart';
 
+class DiskPutTransaction {
+  List<L3HiveEntry> _entries = [];
+
+  void put(String key, Uint8List compressedData, Type originalType, Duration expiryDuration) {
+    final now = DateTime.now();
+    final expiryTime = now.add(expiryDuration);
+    final metaData = L3MetaData(
+        key: key,
+        originalType: originalType.toString(), // 将类型名称存储为字符串
+        expiryTime: expiryTime);
+    final entry = L3HiveEntry(compressedData: compressedData, metaData: metaData);
+    _entries.add(entry);
+  }
+}
+
 
 class DiskCacheManager {
   final String _boxName;
   // 使用 L3HiveEntry 同时存储数据和元数据
-  Box<Map>? _box;
+  LazyBox<Map>? _box;
   bool _isInitialized = false;
   // 使用一个 Completer 来指示初始化何时完成。
   final Completer<void> _initCompleter = Completer<void>();
@@ -31,7 +46,12 @@ class DiskCacheManager {
         Hive.initFlutter(); // 推荐用于 Flutter 网页端
       }
 
-      _box = await Hive.openBox<Map>(_boxName);
+      _box = await Hive.openLazyBox<Map>(
+        _boxName,
+        compactionStrategy: (total, deleted) {
+          return false; // 不自动压缩
+        },
+      );
       _isInitialized = true;
       _initCompleter.complete();
       debugPrint("DiskCacheManager 初始化完成。Box '$_boxName' 已打开。");
@@ -62,6 +82,12 @@ class DiskCacheManager {
     return _box?.length ?? 0;
   }
 
+  Future<void> flush() async {
+    await _ensureInitialized();
+    await _box!.flush();
+    await _box!.compact();
+  }
+
   /// 将压缩数据连同元数据一起放入磁盘缓存
   Future<void> put(String key, Uint8List compressedData, Type originalType, Duration expiryDuration) async {
     await _ensureInitialized();
@@ -81,27 +107,34 @@ class DiskCacheManager {
     }
   }
 
+  /// 批量将压缩数据连同元数据一起放入磁盘缓存
+  Future<void> putBatch(Function(DiskPutTransaction transaction) batch) async {
+    await _ensureInitialized();
+    final transaction = DiskPutTransaction();
+    batch(transaction);
+    if (transaction._entries.isEmpty) {
+      debugPrint("磁盘缓存：批量放入 - 无条目。");
+      return;
+    }
+    try {
+      await _box!.putAll(Map.fromEntries(transaction._entries.map((entry) {
+        return MapEntry(entry.metaData.key, entry.toMap());
+      })));
+      debugPrint("磁盘缓存：批量放入 - ${transaction._entries.length} 个条目。");
+    } catch (e, s) {
+      throw DiskCacheException("将批量条目放入 Hive box '$_boxName' 失败", originalException: e, stackTrace: s);
+    }
+  }
+
   /// 从磁盘缓存中获取数据和元数据。如果未找到或过期，则返回 null。
   /// 异步方法，会确保在调用前初始化。
   ///
   /// 返回一个 L3HiveEntry 对象，包含压缩数据和元数据。
   Future<L3HiveEntry?> get(String key) async {
     await _ensureInitialized();
-    return getSync(key);
-  }
-
-  /// 从磁盘缓存中获取数据和元数据。如果未找到或过期，则返回 null。
-  /// 注意：此方法是同步的，当 hive 未初始化完成时访问会返回空。
-  ///
-  /// 返回一个 L3HiveEntry 对象，包含压缩数据和元数据。
-  L3HiveEntry? getSync(String key) {
-    // 如果未初始化完成，返回 null
-    if (!_isInitialized) {
-      return null;
-    }
     try {
       L3HiveEntry? entry;
-      final Map? entryMap = _box!.get(key);
+      final Map? entryMap = await _box!.get(key);
       if (entryMap != null) {
         entry = L3HiveEntry.fromMap(entryMap);
       }
@@ -116,7 +149,7 @@ class DiskCacheManager {
       // 检查过期时间
       if (metaData.isExpired) {
         debugPrint("磁盘缓存：获取键 '$key' - 已找到但已过期（${metaData.expiryTime}）。正在移除。");
-        remove(key); // 清理过期条目
+        await remove(key); // 清理过期条目
         return null;
       }
 
@@ -171,6 +204,8 @@ class DiskCacheManager {
       }
     }
     if (removedCount > 0) {
+      await _box!.flush();
+      await _box!.compact(); // 在清理后压缩
       debugPrint("磁盘缓存：从 '$_boxName' 中清理了 $removedCount 个过期条目。");
     } else {
       debugPrint("磁盘缓存：清理检查完成。在 '$_boxName' 中未找到过期条目。");
