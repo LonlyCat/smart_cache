@@ -1,5 +1,5 @@
 import 'package:path_provider/path_provider.dart';
-import 'package:hive_ce_flutter/adapters.dart';
+import 'package:hive_flutter/adapters.dart';
 import 'package:flutter/foundation.dart'; // 用于 kIsWeb
 import 'package:path/path.dart' as p;
 import 'dart:async';
