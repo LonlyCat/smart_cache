@@ -52,6 +52,7 @@ class CacheableLoader {
   /// [key] 缓存的键
   /// [cacheOnly] 是否只从缓存加载，默认为false
   /// [loaderOnly] 是否只从加载器加载，默认为false
+  /// [flushWhenSuccess] 是否在加载成功后刷新缓存，默认为 false
   /// [cacheManager] 缓存管理器，不指定时使用标准缓存管理器
   /// [loader] 实际加载数据的函数
   /// [loaderValidator] 加载数据验证器，用于处理是否应该缓存加载器返回的数据
@@ -61,6 +62,7 @@ class CacheableLoader {
     String key, {
     bool cacheOnly = false,
     bool loaderOnly = false,
+    bool flushWhenSuccess = false,
     SmartCacheManager? cacheManager,
     required Future<T?> Function() loader,
     bool Function(T? data)? loaderValidator,
@@ -94,7 +96,7 @@ class CacheableLoader {
       }
       // 将数据存入缓存
       if (willCache && loadedData != null) {
-        cacheManager.put<T>(key, loadedData);
+        cacheManager.put<T>(key, loadedData, flushNow: flushWhenSuccess);
       }
       // 返回加载器数据
       yield CacheableLoadResult.fromLoader(loadedData);
@@ -110,6 +112,7 @@ class CacheableLoader {
   /// [loader] 实际加载数据的函数
   /// [cacheOnly] 是否只从缓存加载，默认为false
   /// [loaderOnly] 是否只从加载器加载，默认为false
+  /// [flushWhenSuccess] 是否在加载成功后刷新缓存，默认为 false
   /// [cacheManager] 缓存管理器，不指定时使用标准缓存管理器
   /// [loaderValidator] 加载数据验证器，用于处理是否应该缓存加载器返回的数据
   ///
@@ -118,6 +121,7 @@ class CacheableLoader {
     String key, {
     bool cacheOnly = false,
     bool loaderOnly = false,
+    bool flushWhenSuccess = false,
     SmartCacheManager? cacheManager,
     required Future<T?> Function() loader,
     bool Function(T? data)? loaderValidator,
@@ -150,7 +154,7 @@ class CacheableLoader {
       // 将数据存入缓存
       if (willCache && loadedData != null) {
         // 返回加载器数据
-        cacheManager.put<T>(key, loadedData);
+        cacheManager.put<T>(key, loadedData, flushNow: flushWhenSuccess);
       }
       return CacheableLoadResult.fromLoader(loadedData);
     } catch (e) {

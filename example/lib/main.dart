@@ -160,7 +160,7 @@ class _MemoryComparisonHomeState extends State<MemoryComparisonHome>
       _traditionalCache[productId] = product;
 
       // 存储到SmartCache
-      _smartCache.put<Product>(productId, product);
+      _smartCache.put<Product>(productId, product, flushNow: i == _productsPerBatch - 1);
     }
   }
 

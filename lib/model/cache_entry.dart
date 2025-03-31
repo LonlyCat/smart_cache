@@ -7,11 +7,13 @@ class L1CacheEntry<T> {
   T value; // 值是可变的，因为访问时会更新
   DateTime lastAccessTime;
   final Type originalType; // 保存原始类型，用于降级时序列化
+  final bool allowDowngrade; // 是否允许降级
 
   L1CacheEntry({
     required this.key,
     required this.value,
     required this.originalType,
+    this.allowDowngrade = true,
   }) : lastAccessTime = DateTime.now();
 
   void touch() {

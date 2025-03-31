@@ -77,11 +77,17 @@ class DiskCacheManager {
     }
   }
 
+  /// 检查是否包含指定键
+  bool containsKey(String key) {
+    return _box?.containsKey(key) ?? false;
+  }
+
   /// 获取当前缓存数目
   int length() {
     return _box?.length ?? 0;
   }
 
+  /// 立即向 Hive 硬盘缓存刷新数据
   Future<void> flush() async {
     await _ensureInitialized();
     await _box!.flush();

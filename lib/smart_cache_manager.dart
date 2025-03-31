@@ -126,13 +126,18 @@ class SmartCacheManager {
     _logInfo("已注册 fromJson 工厂函数。");
   }
 
+  /// 检查缓存数据是否包含指定键
+  bool containsKey(String key) {
+    return _l1Cache.containsKey(key) || _l2Cache.containsKey(key) || _diskCacheManager.containsKey(key);
+  }
+
   // --- 核心缓存操作 ---
 
   /// 通过键检索缓存项。
   /// 按顺序检查 L1、L2、L3（磁盘）。处理解压缩和反序列化。
   /// 如果项未找到或在 L3 中已过期，则返回 null。
   /// 将在 L2/L3 中找到的项提升回 L1。
-  Future<T?> get<T>(String key) async {
+  Future<T?> get<T>(String key, { bool decompressSync = false }) async {
     _logDebug("获取请求：键 '$key'，类型 $T");
 
     // 1. 检查 L1（内存缓存）
@@ -161,7 +166,9 @@ class SmartCacheManager {
         _logDebug("L2 命中：键 '$key'。正在解压缩并提升到 L1。");
         try {
           // 解压缩（可能在隔离线程中进行）
-          final String jsonData = await _compressionUtils.decompress(l2Entry.compressedData);
+          final String jsonData = decompressSync
+              ? _compressionUtils.decompressSync(l2Entry.compressedData)
+              : await _compressionUtils.decompress(l2Entry.compressedData);
 
           // 反序列化（在主隔离线程上）
           final T? value = _deserialize<T>(jsonData);
@@ -321,7 +328,10 @@ class SmartCacheManager {
   /// 在 L1 缓存中添加或更新项。
   /// 检查对象是否具有 `toJson` 方法。
   /// 如果键存在于 L2 中，则从中移除。
-  Future<void> put<T>(String key, T value) async {
+  ///
+  /// [allowDowngrade] 参数允许降级到 L2 缓存。
+  /// [flushNow] 是否立即将缓存写入 L3。
+  Future<void> put<T>(String key, T value, { bool allowDowngrade = true, bool flushNow = false }) async {
     _logDebug("放入请求：键 '$key'，类型 $T");
 
     // --- 检查 toJson 方法 ---
@@ -342,12 +352,16 @@ class SmartCacheManager {
     }
 
     // 添加到 L1
-    final entry = L1CacheEntry<T>(key: key, value: value, originalType: T);
+    final entry = L1CacheEntry<T>(key: key, value: value, originalType: T, allowDowngrade: allowDowngrade);
     _l1Cache[key] = entry;
     _logInfo("放入成功：键 '$key' 已存入 L1。");
 
     // 如果定时器当前未运行，则启动它
     _ensureMaintenanceTimerRunning();
+
+    if (flushNow) { // 立即刷新到 L3（磁盘）
+      _flushEntryToL3(entry);
+    }
   }
 
   /// 从所有缓存层（L1、L2、L3）中移除项。
@@ -536,7 +550,7 @@ class SmartCacheManager {
       final entry = _l1Cache[key];
       if (entry == null) continue; // 安全检查
 
-      if (now.difference(entry.lastAccessTime) > _config.l1DowngradeDuration) {
+      if (entry.allowDowngrade && now.difference(entry.lastAccessTime) > _config.l1DowngradeDuration) {
         _logDebug("L1->L2：键 '$key' 符合降级条件。");
         // 在加入批量前序列化
         final String? jsonData = _serialize(entry.value);
@@ -697,6 +711,30 @@ class SmartCacheManager {
     entriesToProcess.clear();
 
     await _diskCacheManager.flush();
+  }
+
+  /// 立即将 L1 条目刷新到 L3（磁盘）。
+  Future<void> _flushEntryToL3(L1CacheEntry entry) async {
+    try {
+      // 序列化
+      String? jsonData = _serialize(entry.value);
+      if (jsonData == null) {
+        _logError("_flushEntryToL3 键 '${entry.key}' 的序列化失败。");
+        return; // 序列化失败
+      }
+      // 压缩
+      Uint8List compressedData = await _compressionUtils.compress(jsonData);
+      await _diskCacheManager.put(
+        entry.key,
+        compressedData,
+        entry.originalType,
+        _config.l3DefaultExpiryDuration,
+      );
+      await _diskCacheManager.flush();
+      _logDebug("_flushEntryToL3：成功将键 '${entry.key}' 刷新到 L3。");
+    } catch (e) {
+      _logError("_flushEntryToL3 键 '${entry.key}' 的序列化失败");
+    }
   }
 
   /// 释放资源，关闭 Hive box，停止定时器。
