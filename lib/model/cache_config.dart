@@ -1,12 +1,6 @@
-
-import 'package:flutter/foundation.dart';
-
 class SmartCacheConfig {
-  /// L1 缓存项在最后一次访问后，多久降级到 L2
+  /// L1 缓存项在最后一次访问后，多久降级到 L3
   final Duration l1DowngradeDuration;
-
-  /// L2 缓存项在最后一次访问后，多久降级到 L3
-  final Duration l2DowngradeDuration;
 
   /// L3 磁盘缓存的默认有效期 (从写入磁盘开始计算)
   final Duration l3DefaultExpiryDuration;
@@ -26,7 +20,6 @@ class SmartCacheConfig {
 
   SmartCacheConfig({
     this.l1DowngradeDuration = const Duration(seconds: 30),
-    this.l2DowngradeDuration = const Duration(minutes: 2),
     this.l3DefaultExpiryDuration = const Duration(days: 7),
     this.maintenanceInterval = const Duration(seconds: 15),
     this.diskCacheBoxName = 'smart_cache_l3',
@@ -36,16 +29,8 @@ class SmartCacheConfig {
 
   // 添加一些验证逻辑
   void validate() {
-    if (l1DowngradeDuration <= Duration.zero ||
-        l2DowngradeDuration <= Duration.zero ||
-        l3DefaultExpiryDuration <= Duration.zero ||
-        maintenanceInterval <= Duration.zero) {
+    if (l1DowngradeDuration <= Duration.zero || l3DefaultExpiryDuration <= Duration.zero || maintenanceInterval <= Duration.zero) {
       throw ArgumentError("缓存持续时间和间隔必须为正数");
-    }
-    if (l1DowngradeDuration >= l2DowngradeDuration) {
-      // 警告或特定逻辑，L2 可能效果不佳
-      debugPrint("Warning: l1DowngradeDuration is >= l2DowngradeDuration. "
-          "考虑调整时间安排以实现二级缓存的最佳使用.");
     }
   }
 }

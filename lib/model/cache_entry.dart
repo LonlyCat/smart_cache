@@ -1,4 +1,3 @@
-
 import 'dart:typed_data';
 
 /// L1 缓存条目
@@ -14,24 +13,6 @@ class L1CacheEntry<T> {
     required this.value,
     required this.originalType,
     this.allowDowngrade = true,
-  }) : lastAccessTime = DateTime.now();
-
-  void touch() {
-    lastAccessTime = DateTime.now();
-  }
-}
-
-/// L2 缓存条目 (压缩后的数据)
-class L2CacheEntry {
-  final String key;
-  final Uint8List compressedData; // 压缩后的二进制数据
-  final Type originalType; // 用于解压后反序列化
-  DateTime lastAccessTime;
-
-  L2CacheEntry({
-    required this.key,
-    required this.compressedData,
-    required this.originalType,
   }) : lastAccessTime = DateTime.now();
 
   void touch() {
@@ -64,11 +45,11 @@ class L3MetaData {
         createdAt = DateTime.fromMillisecondsSinceEpoch(map['createdAt'] as int);
 
   Map<String, dynamic> toMap() => {
-    'key': key,
-    'originalType': originalType,
-    'expiryTime': expiryTime.millisecondsSinceEpoch,
-    'createdAt': createdAt.millisecondsSinceEpoch,
-  };
+        'key': key,
+        'originalType': originalType,
+        'expiryTime': expiryTime.millisecondsSinceEpoch,
+        'createdAt': createdAt.millisecondsSinceEpoch,
+      };
 
   bool get isExpired => DateTime.now().isAfter(expiryTime);
 }
@@ -84,9 +65,8 @@ class L3HiveEntry {
       : compressedData = map['compressedData'] as Uint8List,
         metaData = L3MetaData.fromMap(map['metaData'] as Map<dynamic, dynamic>);
 
-
   Map<String, dynamic> toMap() => {
-    'compressedData': compressedData,
-    'metaData': metaData.toMap(),
-  };
+        'compressedData': compressedData,
+        'metaData': metaData.toMap(),
+      };
 }

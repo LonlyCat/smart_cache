@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:isolate';
-import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 
@@ -132,11 +131,11 @@ class BackgroundProcessor {
         if (message.isError) {
           task.completer.completeError(message.result);
         } else {
-          try{
+          try {
             task.completer.complete(message.result);
-          } catch (e,s){
+          } catch (e, s) {
             debugPrint('Error completing task: $e\n$s');
-            task.completer.completeError(e,s); // Handle type cast errors
+            task.completer.completeError(e, s); // Handle type cast errors
           }
         }
         _tryDispatch(); // 尝试执行队列中的下一个任务
@@ -193,8 +192,7 @@ class BackgroundProcessor {
     if (_initCompleter != null) {
       // 如果还没初始化完成，先等待
       _initCompleter!.future.then((_) => _tryDispatch());
-    }
-    else {
+    } else {
       _tryDispatch(); // 尝试立即分发
     }
 
@@ -235,7 +233,6 @@ class BackgroundProcessor {
     await _resultSubscription.cancel();
     _resultPort.close();
 
-
     // 最终清理
     _pendingTasks.forEach((id, task) {
       if (!task.completer.isCompleted) {
@@ -260,7 +257,8 @@ class BackgroundProcessor {
 
     // 2. 监听来自主 Isolate 的任务
     await for (final message in taskReceivePort) {
-      if (message == null) { // null 是关闭信号
+      if (message == null) {
+        // null 是关闭信号
         debugPrint('Worker received dispose signal. Shutting down.');
         taskReceivePort.close(); // 关闭端口，退出循环
         break;

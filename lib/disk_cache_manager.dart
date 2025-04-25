@@ -8,7 +8,7 @@ import 'model/cache_exceptions.dart';
 import 'model/cache_entry.dart';
 
 class DiskPutTransaction {
-  List<L3HiveEntry> _entries = [];
+  final List<L3HiveEntry> _entries = [];
 
   void put(String key, Uint8List compressedData, Type originalType, Duration expiryDuration) {
     final now = DateTime.now();
@@ -21,7 +21,6 @@ class DiskPutTransaction {
     _entries.add(entry);
   }
 }
-
 
 class DiskCacheManager {
   final String _boxName;
@@ -38,7 +37,8 @@ class DiskCacheManager {
     if (_initCompleter.isCompleted) return _initCompleter.future; // 已在初始化或已完成
 
     try {
-      if (!kIsWeb) { // 在移动端/桌面端 Hive 需要 path_provider
+      if (!kIsWeb) {
+        // 在移动端/桌面端 Hive 需要 path_provider
         final dir = await getApplicationDocumentsDirectory();
         Hive.init(p.join(dir.path, 'hive_cache')); // 在子文件夹中初始化 Hive
       } else {
@@ -58,10 +58,7 @@ class DiskCacheManager {
       // 可选：在初始化时运行 pruneExpired
       await pruneExpired();
     } catch (e, s) {
-      _initCompleter.completeError(
-          DiskCacheException("初始化 Hive box '$_boxName' 失败", originalException: e, stackTrace: s),
-          s
-      );
+      _initCompleter.completeError(DiskCacheException("初始化 Hive box '$_boxName' 失败", originalException: e, stackTrace: s), s);
       // 重新抛出或适当地处理初始化失败
       rethrow;
     }
@@ -161,7 +158,6 @@ class DiskCacheManager {
 
       debugPrint("磁盘缓存：获取键 '$key' - 已找到且有效。");
       return entry;
-
     } catch (e, s) {
       // 处理获取期间可能出现的 Hive 错误
       throw DiskCacheException("从 Hive box '$_boxName' 获取键 '$key' 失败", originalException: e, stackTrace: s);

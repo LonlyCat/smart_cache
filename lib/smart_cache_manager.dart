@@ -23,8 +23,7 @@ class SmartCacheManager {
 
   static SmartCacheManager get instance {
     if (_instance == null) {
-      throw StateError(
-          "SmartCacheManager 未初始化。请先调用 SmartCacheManager.initialize()。");
+      throw StateError("SmartCacheManager 未初始化。请先调用 SmartCacheManager.initialize()。");
     }
     return _instance!;
   }
@@ -61,10 +60,7 @@ class SmartCacheManager {
   // L1 缓存：快速访问，原始对象。使用 LinkedHashMap 维护插入顺序（如果以后需要 LRU 策略）
   final LinkedHashMap<String, L1CacheEntry> _l1Cache = LinkedHashMap();
 
-  // L2 缓存：内存中的压缩对象。
-  final LinkedHashMap<String, L2CacheEntry> _l2Cache = LinkedHashMap();
-
-  // L3 缓存：磁盘缓存管理器
+  // L2 缓存：磁盘缓存管理器
   late final DiskCacheManager _diskCacheManager;
 
   // 压缩工具
@@ -87,17 +83,13 @@ class SmartCacheManager {
   Level get _logLevel => _config.enableLogs ? Level.debug : Level.off;
 
   // --- 私有构造函数 ---
-  SmartCacheManager._internal(this._config, Logger? logger) :
-        _logger = logger ?? Logger( // 默认日志记录器配置
-          level: _config.enableLogs ? Level.debug : Level.off,
-          printer: PrettyPrinter(
-              methodCount: 1,
-              errorMethodCount: 5,
-              lineLength: 80,
-              colors: true,
-              printEmojis: true,
-              printTime: true), // 通过配置控制日志级别
-        );
+  SmartCacheManager._internal(this._config, Logger? logger)
+      : _logger = logger ??
+            Logger(
+              // 默认日志记录器配置
+              level: _config.enableLogs ? Level.debug : Level.off,
+              printer: PrettyPrinter(methodCount: 1, errorMethodCount: 5, lineLength: 80, colors: true, printEmojis: true, printTime: true), // 通过配置控制日志级别
+            );
 
   // --- 初始化辅助方法 ---
   Future<void> _initializeDependencies() async {
@@ -108,16 +100,16 @@ class SmartCacheManager {
     try {
       await _diskCacheManager.initialize();
     } catch (e) {
-      // 为了健壮性，记录日志并继续运行，但不保证 L3 功能。
-      // 如果 _ensureInitialized 抛出异常，get() 调用尝试 L3 时会失败。
-      _logError("初始化磁盘缓存失败。L3 缓存将不可用。", e);
+      // 为了健壮性，记录日志并继续运行，但不保证 L2 功能。
+      // 如果 _ensureInitialized 抛出异常，get() 调用尝试 L2 时会失败。
+      _logError("初始化磁盘缓存失败。L2 缓存将不可用。", e);
     }
   }
 
   // --- 类型工厂注册 ---
 
   /// 为给定的类型 `T` 注册一个 `fromJson` 工厂函数。
-  /// 这对于从 L2/L3 缓存中检索对象时的反序列化至关重要。
+  /// 这对于从 L2/L2 缓存中检索对象时的反序列化至关重要。
   void registerFromJsonFactorFactory(FromJsonFactory factory) {
     if (_fromJsonFactory != null) {
       _logWarning("正在替换现有的 fromJson 工厂函数。");
@@ -128,16 +120,16 @@ class SmartCacheManager {
 
   /// 检查缓存数据是否包含指定键
   bool containsKey(String key) {
-    return _l1Cache.containsKey(key) || _l2Cache.containsKey(key) || _diskCacheManager.containsKey(key);
+    return _l1Cache.containsKey(key) || _diskCacheManager.containsKey(key);
   }
 
   // --- 核心缓存操作 ---
 
   /// 通过键检索缓存项。
-  /// 按顺序检查 L1、L2、L3（磁盘）。处理解压缩和反序列化。
-  /// 如果项未找到或在 L3 中已过期，则返回 null。
-  /// 将在 L2/L3 中找到的项提升回 L1。
-  Future<T?> get<T>(String key, { bool decompressSync = false }) async {
+  /// 按顺序检查 L1、L2（磁盘）。处理解压缩和反序列化。
+  /// 如果项未找到或在 L2 中已过期，则返回 null。
+  /// 将在 L2 中找到的项提升回 L1。
+  Future<T?> get<T>(String key, {bool decompressSync = false}) async {
     _logDebug("获取请求：键 '$key'，类型 $T");
 
     // 1. 检查 L1（内存缓存）
@@ -158,60 +150,16 @@ class SmartCacheManager {
       }
     }
 
-    // 2. 检查 L2（压缩内存缓存）
-    L2CacheEntry? l2Entry = _l2Cache[key];
-    if (l2Entry != null) {
-      // 在解压缩前检查类型兼容性
-      if (l2Entry.originalType == T) {
-        _logDebug("L2 命中：键 '$key'。正在解压缩并提升到 L1。");
-        try {
-          // 解压缩（可能在隔离线程中进行）
-          final String jsonData = decompressSync
-              ? _compressionUtils.decompressSync(l2Entry.compressedData)
-              : await _compressionUtils.decompress(l2Entry.compressedData);
-
-          // 反序列化（在主隔离线程上）
-          final T? value = _deserialize<T>(jsonData);
-
-          if (value != null) {
-            // 提升到 L1
-            final newL1Entry = L1CacheEntry<T>(
-              key: key,
-              value: value,
-              originalType: T, // 使用请求的类型 T
-            );
-            _l1Cache[key] = newL1Entry;
-            _l2Cache.remove(key); // 成功提升后从 L2 移除
-            _logDebug("L2 -> L1 提升成功：键 '$key'。");
-            return value;
-          } else {
-            // 反序列化失败（例如，缺少工厂或 JSON 无效）
-            _logError("L2 命中：键 '$key'，但反序列化失败。移除条目。");
-            await remove(key); // 移除损坏/不可用的条目
-            return null;
-          }
-        } catch (e, s) {
-          _logError("处理 L2 条目时出错：键 '$key'。移除条目。", e, s);
-          await remove(key); // 出错时移除
-          return null;
-        }
-      } else {
-        _logWarning("L2 命中：键 '$key'，但类型不匹配。预期 $T，实际 ${l2Entry.originalType}。丢弃条目。");
-        await remove(key);
-        return null;
-      }
-    }
-
-    // 3. 检查 L3（磁盘缓存）
+    // 2. 检查 L2（磁盘缓存）
     try {
-      final l3Result = await _diskCacheManager.get(key);
-      if (l3Result != null) {
+      final l2Result = await _diskCacheManager.get(key);
+      if (l2Result != null) {
         // 检查类型兼容性
-        if (l3Result.metaData.originalType == T.toString()) {
-          _logDebug("L3 命中：键 '$key'。正在解压缩并提升到 L1。");
+        if (l2Result.metaData.originalType == T.toString()) {
+          _logDebug("L2 命中：键 '$key'。正在解压缩并提升到 L1。");
           try {
             // 解压缩
-            final String jsonData = await _compressionUtils.decompress(l3Result.compressedData);
+            final String jsonData = await _compressionUtils.decompress(l2Result.compressedData);
             // 反序列化
             final T? value = _deserialize<T>(jsonData);
 
@@ -223,31 +171,31 @@ class SmartCacheManager {
                 originalType: T,
               );
               _l1Cache[key] = newL1Entry;
-              // 可选：在提升后立即从 L3 移除？
+              // 可选：在提升后立即从 L2 移除？
               // 或者让过期机制处理？为简单起见，交给过期处理。
               // await _diskCacheManager.remove(key);
-              _logDebug("L3 -> L1 提升成功：键 '$key'。");
+              _logDebug("L2 -> L1 提升成功：键 '$key'。");
               // 如果定时器当前未运行，则启动它
               _ensureMaintenanceTimerRunning();
               return value;
             } else {
-              _logError("L3 命中：键 '$key'，但反序列化失败。移除条目。");
+              _logError("L2 命中：键 '$key'，但反序列化失败。移除条目。");
               await remove(key); // 从磁盘移除损坏的条目
               return null;
             }
           } catch (e, s) {
-            _logError("处理 L3 条目时出错：键 '$key'。移除条目。", e, s);
+            _logError("处理 L2 条目时出错：键 '$key'。移除条目。", e, s);
             await remove(key); // 出错时移除
             return null;
           }
         } else {
-          _logWarning("L3 命中：键 '$key'，但类型不匹配。预期 $T，实际 $T。丢弃条目。");
+          _logWarning("L2 命中：键 '$key'，但类型不匹配。预期 $T，实际 $T。丢弃条目。");
           await remove(key); // 从磁盘移除不一致的类型
           return null;
         }
       }
     } catch (e, s) {
-      _logError("访问 L3 磁盘缓存时出错：键 '$key'。", e, s);
+      _logError("访问 L2 磁盘缓存时出错：键 '$key'。", e, s);
       // 这里不移除键，因为磁盘缓存可能只是暂时不可用
       return null; // 如果磁盘访问失败，返回 null
     }
@@ -258,8 +206,7 @@ class SmartCacheManager {
   }
 
   /// 通过键检索缓存项。
-  /// 注意: 当 [deepSearch] 为 true 时，L2 使用同步 API 搜索，可能会阻塞 UI 线程。
-  T? getSync<T>(String key, { bool deepSearch = false }) {
+  T? getSync<T>(String key) {
     _logDebug("同步获取请求：键 '$key'，类型 $T");
     L1CacheEntry? l1Entry = _l1Cache[key];
     if (l1Entry != null) {
@@ -273,54 +220,6 @@ class SmartCacheManager {
         return null;
       }
     }
-    _logDebug("L1 同步未命中：键 '$key'。");
-    if (!deepSearch) {
-      return null; // 如果不深度搜索，直接返回 null
-    }
-
-    // 2. 检查 L2（压缩内存缓存）
-    L2CacheEntry? l2Entry = _l2Cache[key];
-    if (l2Entry != null) {
-      // 在解压缩前检查类型兼容性
-      if (l2Entry.originalType == T) {
-        _logDebug("L2 命中：键 '$key'。正在解压缩并提升到 L1。");
-        try {
-          // 在主线程解压缩
-          final String jsonData = _compressionUtils.decompressSync(l2Entry.compressedData);
-
-          // 反序列化
-          final T? value = _deserialize<T>(jsonData);
-
-          if (value != null) {
-            // 提升到 L1
-            final newL1Entry = L1CacheEntry<T>(
-              key: key,
-              value: value,
-              originalType: T, // 使用请求的类型 T
-            );
-            _l1Cache[key] = newL1Entry;
-            _l2Cache.remove(key); // 成功提升后从 L2 移除
-            _logDebug("L2 -> L1 提升成功：键 '$key'。");
-            return value;
-          } else {
-            // 反序列化失败（例如，缺少工厂或 JSON 无效）
-            _logError("L2 命中：键 '$key'，但反序列化失败。移除条目。");
-            remove(key); // 移除损坏/不可用的条目
-            return null;
-          }
-        } catch (e, s) {
-          _logError("处理 L2 条目时出错：键 '$key'。移除条目。", e, s);
-          remove(key); // 出错时移除
-          return null;
-        }
-      } else {
-        _logWarning("L2 命中：键 '$key'，但类型不匹配。预期 $T，实际 ${l2Entry.originalType}。丢弃条目。");
-        remove(key);
-        return null;
-      }
-    }
-
-    // 3. L1/L2 缓存中都未找到
     _logDebug("缓存未命中：键 '$key'。");
     return null;
   }
@@ -330,26 +229,18 @@ class SmartCacheManager {
   /// 如果键存在于 L2 中，则从中移除。
   ///
   /// [allowDowngrade] 参数允许降级到 L2 缓存。
-  /// [flushNow] 是否立即将缓存写入 L3。
-  Future<void> put<T>(String key, T value, { bool allowDowngrade = true, bool flushNow = false }) async {
+  /// [flushNow] 是否立即将缓存写入 L2。
+  Future<void> put<T>(String key, T value, {bool allowDowngrade = true, bool flushNow = false}) async {
     _logDebug("放入请求：键 '$key'，类型 $T");
 
     // --- 检查 toJson 方法 ---
-    if (!(value is String || value is num || value is bool ||
-        value is List || value is Map<String, dynamic>)) {
+    if (!(value is String || value is num || value is bool || value is List || value is Map<String, dynamic>)) {
       if ((value as dynamic).toJson is! Function) {
-        throw SerializationException(
-            "无法缓存键 '$key' 的类型 $T 对象。它必须具有返回 'Map<String, dynamic>' 的 'toJson()' 方法，或是 JSON 可编码的原始类型/集合。");
+        throw SerializationException("无法缓存键 '$key' 的类型 $T 对象。它必须具有返回 'Map<String, dynamic>' 的 'toJson()' 方法，或是 JSON 可编码的原始类型/集合。");
       }
     }
     _logDebug("键 '$key' 的 toJson 检查通过。");
     // --- 结束 toJson 检查 ---
-
-    // 从较低层缓存中移除，以防止数据过时
-    if (_l2Cache.containsKey(key)) {
-      _logDebug("由于新的放入操作，从 L2 移除键 '$key'。");
-      _l2Cache.remove(key);
-    }
 
     // 添加到 L1
     final entry = L1CacheEntry<T>(key: key, value: value, originalType: T, allowDowngrade: allowDowngrade);
@@ -359,12 +250,13 @@ class SmartCacheManager {
     // 如果定时器当前未运行，则启动它
     _ensureMaintenanceTimerRunning();
 
-    if (flushNow) { // 立即刷新到 L3（磁盘）
-      _flushEntryToL3(entry);
+    if (flushNow) {
+      // 立即刷新到 L2（磁盘）
+      _flushEntryToL2(entry);
     }
   }
 
-  /// 从所有缓存层（L1、L2、L3）中移除项。
+  /// 从所有缓存层（L1、L2）中移除项。
   Future<void> remove(String key) async {
     _logInfo("移除请求：键 '$key'。");
     bool removed = false;
@@ -374,18 +266,13 @@ class SmartCacheManager {
       removed = true;
     }
     // 从 L2 移除
-    if (_l2Cache.remove(key) != null) {
-      _logDebug("从 L2 移除键 '$key'。");
-      removed = true;
-    }
-    // 从 L3 移除
     try {
       // 假设 DiskCacheManager.remove 能优雅处理不存在的键
       await _diskCacheManager.remove(key);
-      _logDebug("从 L3 移除键 '$key'（如果存在）。");
-      // 考虑 L3 移除失败的情况？在磁盘管理器中记录。
+      _logDebug("从 L2 移除键 '$key'（如果存在）。");
+      // 考虑 L2 移除失败的情况？在磁盘管理器中记录。
     } catch (e, s) {
-      _logError("显式移除期间，从 L3 磁盘缓存移除键 '$key' 失败。", e, s);
+      _logError("显式移除期间，从 L2 磁盘缓存移除键 '$key' 失败。", e, s);
       // 抛出异常还是仅记录？暂时仅记录。
     }
     if (!removed) {
@@ -402,16 +289,11 @@ class SmartCacheManager {
     _logDebug("已清除 L1 缓存（$l1Count 项）。");
 
     // 清除 L2
-    final l2Count = _l2Cache.length;
-    _l2Cache.clear();
-    _logDebug("已清除 L2 缓存（$l2Count 项）。");
-
-    // 清除 L3
     try {
       await _diskCacheManager.clear();
-      _logDebug("已清除 L3 磁盘缓存。");
+      _logDebug("已清除 L2 磁盘缓存。");
     } catch (e, s) {
-      _logError("清除 L3 磁盘缓存失败。", e, s);
+      _logError("清除 L2 磁盘缓存失败。", e, s);
       // 是否应抛出异常？可能对应用功能不关键。
     }
     _logInfo("所有缓存已清除。");
@@ -420,9 +302,8 @@ class SmartCacheManager {
   /// 返回当前每个缓存层中的项。
   CacheStats getStats() {
     return CacheStats(
-      l3Count: _diskCacheManager.length(),
+      l2Count: _diskCacheManager.length(),
       l1Cache: _l1Cache.map((key, entry) => MapEntry(key, entry.value)),
-      l2Cache: _l2Cache.map((key, entry) => MapEntry(key, entry.compressedData)),
     );
   }
 
@@ -436,8 +317,7 @@ class SmartCacheManager {
 
     try {
       dynamic data = jsonDecode(jsonData);
-      if (T is String || T is num || T is bool ||
-          T is List || T is Map<String, dynamic>) {
+      if (T is String || T is num || T is bool || T is List || T is Map<String, dynamic>) {
         // 直接返回原始类型或集合
         return data as T;
       }
@@ -448,10 +328,7 @@ class SmartCacheManager {
       _logError("JSON 解码或工厂执行期间出错：类型 $T。", e, s);
       // 这里不移除缓存条目，让调用者处理失败。
       // 重新抛出特定异常？
-      throw DeserializationException(
-          "为类型 $T 反序列化 JSON 失败。",
-          originalException: e, stackTrace: s
-      );
+      throw DeserializationException("为类型 $T 反序列化 JSON 失败。", originalException: e, stackTrace: s);
       // return null;
     }
   }
@@ -505,15 +382,14 @@ class SmartCacheManager {
         _logDebug("开始维护周期...");
         try {
           await _runDowngradeL1ToL2();
-          await _runDowngradeL2ToL3();
         } catch (e, s) {
           _logError("维护周期中发生错误。", e, s);
         } finally {
           _isMaintenanceRunning = false;
           _logDebug("维护周期结束。");
 
-          // 如果 L1 和 L2 都为空，说明没有需要维护的内存缓存了
-          if (_l1Cache.isEmpty && _l2Cache.isEmpty) {
+          // 如果 L1 为空，说明没有需要维护的内存缓存了
+          if (_l1Cache.isEmpty) {
             _logInfo("缓存处于空闲状态 (L1 和 L2 为空)，停止维护定时器。");
             _stopMaintenanceTimer(); // 停止定时器
           }
@@ -593,41 +469,26 @@ class SmartCacheManager {
     }
 
     // --- 步骤 3：处理成功压缩的结果（更新 L1/L2） ---
-    int downgradeSuccessCount = 0;
-    for (final key in compressedResults.keys) {
-      final compressedData = compressedResults[key];
-      final originalEntry = successfullySerializedEntries[key]; // 获取原始类型信息
+    try {
+      int downgradeSuccessCount = 0;
+      await _diskCacheManager.putBatch((transaction) {
+        for (final key in compressedResults.keys) {
+          final compressedData = compressedResults[key];
+          final originalEntry = successfullySerializedEntries[key]; // 获取原始类型信息
 
-      if (compressedData != null && originalEntry != null) {
-        // 创建 L2 条目
-        final l2Entry = L2CacheEntry(
-          key: key,
-          compressedData: compressedData,
-          originalType: originalEntry.originalType, // 使用存储的类型
-        );
-
-        // 添加到 L2 并从 L1 移除（对该键类似原子的操作）
-        _l2Cache[key] = l2Entry;
-        _l1Cache.remove(key);
-        downgradeSuccessCount++;
-        _logDebug("L1->L2：成功降级键 '$key'。");
-      } else {
-        // 如果键在 compressedResults 中，这种情况不应发生，但进行防御性检查
-        _logWarning("L1->L2：在批次压缩后发现键 '$key' 不一致。跳过。");
-      }
-    }
-
-    // 记录概要并识别失败项（结果中缺少的项）
-    final int failureCount = itemsToCompress.length - downgradeSuccessCount;
-    if (failureCount > 0) {
-      _logWarning("L1->L2：$failureCount 个项在压缩阶段失败（详情请查看隔离线程日志）。它们保留在 L1。");
-      // 可选：如果需要调试，可以列出失败的键：
-      // final failedKeys = itemsToCompress.keys.where((k) => !compressedResults.containsKey(k)).toList();
-      // _logDebug("L1->L2：压缩失败的键：$failedKeys");
-    } else if (downgradeSuccessCount > 0) {
+          if (compressedData != null && originalEntry != null) {
+            downgradeSuccessCount++;
+            transaction.put(key, compressedData, originalEntry.originalType, _config.l3DefaultExpiryDuration);
+          }
+        }
+      });
       _logInfo("L1->L2：成功降级 $downgradeSuccessCount 个项。");
-    } else {
-      _logInfo("L1->L2：本次压缩尝试后没有项成功降级。");
+      for (final key in compressedResults.keys) {
+        _l1Cache.remove(key); // 从 L1 移除成功降级的项
+      }
+      await _diskCacheManager.flush();
+    } catch (e, s) {
+      _logError("L1->L2：批处理降级到磁盘时出错。", e, s);
     }
 
     itemsToCompress.clear();
@@ -636,90 +497,13 @@ class SmartCacheManager {
     successfullySerializedEntries.clear();
   }
 
-  /// 将符合条件的项从 L2 降级到 L3（磁盘）。
-  Future<void> _runDowngradeL2ToL3() async {
-    final now = DateTime.now();
-    final List<String> keysToDowngrade = [];
-    final Map<String, L2CacheEntry> entriesToProcess = {};
-
-    final currentKeys = _l2Cache.keys.toList();
-    for (final key in currentKeys) {
-      final entry = _l2Cache[key];
-      if (entry == null) continue;
-
-      if (now.difference(entry.lastAccessTime) > _config.l2DowngradeDuration) {
-        _logDebug("L2->L3：键 '$key' 符合降级条件（空闲 > ${_config.l2DowngradeDuration}）。");
-        keysToDowngrade.add(key);
-        entriesToProcess[key] = entry;
-      }
-    }
-
-    if (keysToDowngrade.isEmpty) {
-      _logDebug("L2->L3：没有符合降级的项。");
-      return;
-    }
-    _logInfo("L2->L3：找到 ${keysToDowngrade.length} 个项需要降级。");
-
-    // // 处理降级（写入磁盘）
-    // for (final key in keysToDowngrade) {
-    //   final entry = entriesToProcess[key];
-    //   if (entry == null) continue;
-    //
-    //   try {
-    //     // 将 L2 的压缩数据直接写入 L3 磁盘缓存
-    //     await _diskCacheManager.put(
-    //       key,
-    //       entry.compressedData,
-    //       entry.originalType,
-    //       _config.l3DefaultExpiryDuration, // 使用 L3 的默认过期时间
-    //     );
-    //
-    //     // 成功写入 L3 后从 L2 移除
-    //     _l2Cache.remove(key);
-    //     _logDebug("L2->L3：成功将键 '$key' 降级到磁盘。");
-    //
-    //   } catch (e, s) {
-    //     _logError("L2->L3：降级键 '$key' 到磁盘时出错。暂时保留在 L2。", e, s);
-    //     // 如果磁盘写入失败，不从 L2 移除，或许下个周期重试？
-    //   }
-    // }
-
-    // 使用批处理 API 降级（写入磁盘）
-    try {
-      await _diskCacheManager.putBatch((transaction) {
-        for (final key in keysToDowngrade) {
-          final entry = entriesToProcess[key];
-          if (entry == null) continue;
-
-          // 将 L2 的压缩数据直接写入 L3 磁盘缓存
-          transaction.put(
-            key,
-            entry.compressedData,
-            entry.originalType,
-            _config.l3DefaultExpiryDuration, // 使用 L3 的默认过期时间
-          );
-
-          // 写入 L3 后从 L2 移除
-          _l2Cache.remove(key);
-        }
-      });
-    } catch (e, s) {
-      _logError("L2->L3：批处理降级到磁盘时出错。", e, s);
-    }
-
-    keysToDowngrade.clear();
-    entriesToProcess.clear();
-
-    await _diskCacheManager.flush();
-  }
-
-  /// 立即将 L1 条目刷新到 L3（磁盘）。
-  Future<void> _flushEntryToL3(L1CacheEntry entry) async {
+  /// 立即将 L1 条目刷新到 L2（磁盘）。
+  Future<void> _flushEntryToL2(L1CacheEntry entry) async {
     try {
       // 序列化
       String? jsonData = _serialize(entry.value);
       if (jsonData == null) {
-        _logError("_flushEntryToL3 键 '${entry.key}' 的序列化失败。");
+        _logError("_flushEntryToL2 键 '${entry.key}' 的序列化失败。");
         return; // 序列化失败
       }
       // 压缩
@@ -731,9 +515,10 @@ class SmartCacheManager {
         _config.l3DefaultExpiryDuration,
       );
       await _diskCacheManager.flush();
-      _logDebug("_flushEntryToL3：成功将键 '${entry.key}' 刷新到 L3。");
+      _l1Cache.remove(entry.key);
+      _logDebug("_flushEntryToL2：成功将键 '${entry.key}' 刷新到 L2。");
     } catch (e) {
-      _logError("_flushEntryToL3 键 '${entry.key}' 的序列化失败");
+      _logError("_flushEntryToL2 键 '${entry.key}' 的序列化失败");
     }
   }
 
@@ -742,7 +527,6 @@ class SmartCacheManager {
     _logInfo("正在释放 SmartCacheManager...");
     _stopMaintenanceTimer();
     _l1Cache.clear();
-    _l2Cache.clear();
     _typeNameToTypeRegistry.clear();
     _fromJsonFactory = null;
     _instance = null; // 允许重新初始化
